@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Check, Download, Plus, Search, Trash2, Users } from 'lucide-react';
+import { Check, CircleHelp, Download, Plus, Search, Trash2, Users, X } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 import './styles.css';
@@ -44,11 +44,41 @@ const initial = {
   cells: Object.fromEntries(characterSeed.flatMap((_, r) => scenesSeed.map((__, c) => [`c${r}:s${c}`, pattern[r][c] === 'plus' ? 'bss' : pattern[r][c] === 'on' ? 'on' : 'off'])))
 };
 
-const stateOrder = ['off', 'on', 'bss'];
-const labels = { off: '', on: 'ON', bss: 'BSS' };
+const stateOrder = ['off', 'on', 'ens', 'bss'];
+const labels = { off: '', on: 'ON', ens: 'ENS', bss: 'BSS' };
+
+const SmartField = forwardRef(function SmartField({ value, onChange, suggestions = [], onAdvance, onSubmit, ...props }, ref) {
+  const [open, setOpen] = useState(false);
+  const matches = useMemo(() => {
+    const query = value.trim().toLowerCase();
+    if (!query) return [];
+    return suggestions.filter(item => item.toLowerCase().includes(query)).sort((a, b) => Number(b.toLowerCase().startsWith(query)) - Number(a.toLowerCase().startsWith(query)) || a.localeCompare(b)).slice(0, 6);
+  }, [value, suggestions]);
+  const accept = candidate => { onChange(candidate); setOpen(false); };
+  return <div className="smart-field">
+    <input ref={ref} value={value} onChange={e => { onChange(e.target.value); setOpen(true); }} onFocus={() => value.trim() && setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 100)} onKeyDown={e => {
+      if (e.key === 'Tab' && !e.shiftKey) {
+        const resolved = value.trim() && matches.length ? matches[0] : value;
+        if (resolved !== value) onChange(resolved);
+        setOpen(false);
+        if (onAdvance) {
+          e.preventDefault();
+          requestAnimationFrame(() => onAdvance(resolved));
+        }
+      }
+      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Enter' && onSubmit) {
+        e.preventDefault();
+        setOpen(false);
+        onSubmit(value);
+      }
+    }} {...props}/>
+    {open && matches.length > 0 && <div className="smart-options">{matches.map((item, index) => <button type="button" className={index === 0 ? 'top-match' : ''} key={item} onMouseDown={e => { e.preventDefault(); accept(item); onAdvance?.(item); }}>{item}</button>)}</div>}
+  </div>;
+});
 
 function normalisePlot(plot) {
-  return { ...plot, cells: Object.fromEntries(Object.entries(plot.cells || {}).map(([key, value]) => [key, value === 'plus' ? 'bss' : value === 'on' || value === 'bss' ? value : 'off'])) };
+  return { ...plot, characters: (plot.characters || []).map(character => ({ ...character, defaultGroup: character.defaultGroup || '' })), cells: Object.fromEntries(Object.entries(plot.cells || {}).map(([key, value]) => [key, value === 'plus' ? 'bss' : ['on', 'ens', 'bss'].includes(value) ? value : 'off'])) };
 }
 
 function loadSession() {
@@ -77,9 +107,19 @@ function App() {
   const [reportOpen, setReportOpen] = useState(false);
   const [collateCast, setCollateCast] = useState(() => localStorage.getItem('mic-plot-collate-cast') === 'true');
   const [easterEgg, setEasterEgg] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(() => localStorage.getItem('mic-plot-advanced') === 'true');
+  const [drawer, setDrawer] = useState(null);
+  const [selectedCharacterId, setSelectedCharacterId] = useState(null);
+  const [selectedCastName, setSelectedCastName] = useState('');
+  const [selectedSceneIds, setSelectedSceneIds] = useState([]);
+  const [bulkDraft, setBulkDraft] = useState({ name: '', actor: '', defaultGroup: '' });
   const nameRefs = useRef({});
   const sceneRefs = useRef({});
   const showFileRef = useRef(null);
+  const bulkNameRef = useRef(null);
+  const bulkActorRef = useRef(null);
+  const bulkGroupRef = useRef(null);
 
   useEffect(() => {
     if (!plot.id) return;
@@ -104,7 +144,7 @@ function App() {
       showName,
       title: `${company} - ${showName}`,
       scenes: [{ id: sceneId, name: 'New scene' }],
-      characters: [{ id: characterId, name: 'New character', actor: '' }],
+      characters: [{ id: characterId, name: 'New character', actor: '', defaultGroup: '' }],
       cells: { [`${characterId}:${sceneId}`]: 'off' }
     };
     setPlot(created);
@@ -130,7 +170,8 @@ function App() {
 
   const visible = useMemo(() => plot.characters.filter(c => `${c.name} ${c.actor}`.toLowerCase().includes(query.toLowerCase())), [plot.characters, query]);
   const castSuggestions = useMemo(() => [...new Set(plot.characters.map(c => c.actor.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [plot.characters]);
-  const activeCount = Object.values(plot.cells).filter(v => v === 'on' || v === 'bss').length;
+  const groupSuggestions = useMemo(() => [...new Set(plot.characters.map(c => (c.defaultGroup || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [plot.characters]);
+  const activeCount = Object.values(plot.cells).filter(v => ['on', 'ens', 'bss'].includes(v)).length;
   const characterWidth = Math.max(50, Math.ceil(Math.max('CHARACTER'.length, ...plot.characters.map(c => c.name.length)) * 6.2 + 24));
   const actorWidth = Math.max(50, Math.ceil(Math.max('CAST MEMBER'.length, ...plot.characters.map(c => c.actor.length)) * 6.2 + 24));
   const castReportRows = useMemo(() => {
@@ -143,7 +184,7 @@ function App() {
     });
     const cellState = (characters, sceneId) => {
       const values = characters.map(character => plot.cells[`${character.id}:${sceneId}`]);
-      return values.includes('on') ? 'on' : values.includes('bss') ? 'bss' : 'off';
+      return values.includes('on') ? 'on' : values.includes('ens') ? 'ens' : values.includes('bss') ? 'bss' : 'off';
     };
     return [...groups.values()].flatMap(group => collateCast
       ? [{ id: group.characters.map(c => c.id).join(':'), groupId: group.key, actor: group.actor, character: `${group.characters[0].name}${group.characters.length > 1 ? ` +${group.characters.length - 1}` : ''}`, states: Object.fromEntries(plot.scenes.map(scene => [scene.id, cellState(group.characters, scene.id)])) }]
@@ -152,6 +193,7 @@ function App() {
   }, [plot.characters, plot.scenes, plot.cells, collateCast]);
 
   useEffect(() => { localStorage.setItem('mic-plot-collate-cast', String(collateCast)); }, [collateCast]);
+  useEffect(() => { localStorage.setItem('mic-plot-advanced', String(advancedMode)); }, [advancedMode]);
 
   useEffect(() => {
     if (!pendingFocus) return;
@@ -177,14 +219,14 @@ function App() {
 
   const updateCell = (cid, sid) => setPlot(p => {
     const key = `${cid}:${sid}`;
-    const current = p.cells[key] === 'on' || p.cells[key] === 'bss' ? p.cells[key] : 'off';
+    const current = ['on', 'ens', 'bss'].includes(p.cells[key]) ? p.cells[key] : 'off';
     return { ...p, cells: { ...p.cells, [key]: stateOrder[(stateOrder.indexOf(current) + 1) % stateOrder.length] } };
   });
 
   const addCharacter = () => {
     const id = crypto.randomUUID();
     setQuery('');
-    setPlot(p => ({ ...p, characters: [...p.characters, { id, name: 'New character', actor: '' }] }));
+    setPlot(p => ({ ...p, characters: [...p.characters, { id, name: 'New character', actor: '', defaultGroup: '' }] }));
     setPendingFocus(id);
   };
   const addScene = () => {
@@ -211,6 +253,28 @@ function App() {
     updateCharacter(characterId, 'actor', name);
     setCastMenu(null);
   };
+  const addBulkCharacter = groupValue => {
+    const name = bulkDraft.name.trim();
+    if (!name) { bulkNameRef.current?.focus(); return; }
+    const id = crypto.randomUUID();
+    setPlot(p => ({ ...p, characters: [...p.characters, { id, name, actor: bulkDraft.actor.trim(), defaultGroup: String(groupValue ?? bulkDraft.defaultGroup).trim() }] }));
+    setBulkDraft({ name: '', actor: '', defaultGroup: '' });
+    requestAnimationFrame(() => bulkNameRef.current?.focus());
+  };
+  const selectScene = id => setSelectedSceneIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  const toggleGroupForScenes = group => {
+    if (!selectedSceneIds.length) return;
+    const members = plot.characters.filter(character => character.defaultGroup === group);
+    if (!members.length) return;
+    setPlot(p => {
+      const cells = { ...p.cells };
+      const values = selectedSceneIds.flatMap(sceneId => members.map(character => cells[`${character.id}:${sceneId}`] || 'off'));
+      const sharedState = values.every(value => value === values[0]) ? values[0] : 'off';
+      const nextState = stateOrder[(stateOrder.indexOf(sharedState) + 1) % stateOrder.length];
+      selectedSceneIds.forEach(sceneId => members.forEach(character => { cells[`${character.id}:${sceneId}`] = nextState; }));
+      return { ...p, cells };
+    });
+  };
   const moveCharacter = (fromId, toId) => {
     if (!fromId || fromId === toId) return;
     setPlot(p => {
@@ -226,7 +290,7 @@ function App() {
 
   const exportCsv = () => {
     const q = v => `"${String(v).replaceAll('"', '""')}"`;
-    const lines = [['Character','Cast member',...plot.scenes.map(s => s.name)], ...plot.characters.map(c => [c.name,c.actor,...plot.scenes.map(s => labels[plot.cells[`${c.id}:${s.id}`] || 'blank'])])];
+    const lines = [['Character','Cast member',...plot.scenes.map(s => s.name)], ...plot.characters.map(c => [c.name,c.actor,...plot.scenes.map(s => labels[plot.cells[`${c.id}:${s.id}`] || 'off'])])];
     const blob = new Blob([lines.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${plot.title || 'mic-plot'}.csv`; a.click(); URL.revokeObjectURL(a.href);
   };
@@ -275,7 +339,8 @@ function App() {
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.cellWidth = 11;
         if (data.cell.raw === 'ON') { data.cell.styles.fillColor = [45, 114, 89]; data.cell.styles.textColor = [255, 255, 255]; }
-        if (data.cell.raw === 'BSS') { data.cell.styles.fillColor = [231, 119, 61]; data.cell.styles.textColor = [255, 255, 255]; }
+        if (data.cell.raw === 'ENS') { data.cell.styles.fillColor = [231, 119, 61]; data.cell.styles.textColor = [255, 255, 255]; }
+        if (data.cell.raw === 'BSS') { data.cell.styles.fillColor = [110, 117, 216]; data.cell.styles.textColor = [255, 255, 255]; }
       },
       didDrawCell: data => {
         if (data.section !== 'head' || data.column.index < 3) return;
@@ -288,8 +353,9 @@ function App() {
       didDrawPage: () => {
         doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(23, 63, 52); doc.text(plot.title || 'Mic Plot', 10, 12);
         doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text('A3 MIC PLOT', 10, 18);
-        doc.setFillColor(45, 114, 89); doc.circle(315, 13.5, 2, 'F'); doc.text('ON · Onstage', 319, 15);
-        doc.setFillColor(231, 119, 61); doc.circle(351, 13.5, 2, 'F'); doc.text('BSS · Backstage singer', 355, 15);
+        doc.setFillColor(45, 114, 89); doc.circle(292, 13.5, 2, 'F'); doc.text('ON · Onstage', 296, 15);
+        doc.setFillColor(231, 119, 61); doc.circle(330, 13.5, 2, 'F'); doc.text('ENS · Ensemble', 334, 15);
+        doc.setFillColor(110, 117, 216); doc.circle(369, 13.5, 2, 'F'); doc.text('BSS · Backstage singer', 373, 15);
       }
     });
 
@@ -330,7 +396,8 @@ function App() {
         data.cell.styles.fontStyle = 'bold';
         data.cell.styles.cellWidth = 11;
         if (data.cell.raw === 'ON') { data.cell.styles.fillColor = [45, 114, 89]; data.cell.styles.textColor = [255, 255, 255]; }
-        if (data.cell.raw === 'BSS') { data.cell.styles.fillColor = [231, 119, 61]; data.cell.styles.textColor = [255, 255, 255]; }
+        if (data.cell.raw === 'ENS') { data.cell.styles.fillColor = [231, 119, 61]; data.cell.styles.textColor = [255, 255, 255]; }
+        if (data.cell.raw === 'BSS') { data.cell.styles.fillColor = [110, 117, 216]; data.cell.styles.textColor = [255, 255, 255]; }
       },
       didDrawCell: data => {
         if (data.section !== 'head' || data.column.index < 2) return;
@@ -342,8 +409,9 @@ function App() {
       didDrawPage: () => {
         doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(23, 63, 52); doc.text(plot.title || 'Mic Plot', 10, 12);
         doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text(`A3 CAST VIEW · ${collateCast ? 'COLLATED ROLES' : 'EXPANDED ROLES'}`, 10, 18);
-        doc.setFillColor(45, 114, 89); doc.circle(315, 13.5, 2, 'F'); doc.text('ON · Onstage', 319, 15);
-        doc.setFillColor(231, 119, 61); doc.circle(351, 13.5, 2, 'F'); doc.text('BSS · Backstage singer', 355, 15);
+        doc.setFillColor(45, 114, 89); doc.circle(292, 13.5, 2, 'F'); doc.text('ON · Onstage', 296, 15);
+        doc.setFillColor(231, 119, 61); doc.circle(330, 13.5, 2, 'F'); doc.text('ENS · Ensemble', 334, 15);
+        doc.setFillColor(110, 117, 216); doc.circle(369, 13.5, 2, 'F'); doc.text('BSS · Backstage singer', 373, 15);
       }
     });
 
@@ -351,7 +419,15 @@ function App() {
     doc.save(`${filename} - cast view${collateCast ? ' - collated' : ''}.pdf`);
   };
 
-  return <div className="app">
+  const selectedCharacter = plot.characters.find(character => character.id === selectedCharacterId);
+  const selectedCastCharacters = plot.characters.filter(character => (character.actor || '').trim().toLocaleLowerCase() === selectedCastName.trim().toLocaleLowerCase());
+  const renameSelectedCast = value => {
+    const oldName = selectedCastName;
+    setPlot(p => ({ ...p, characters: p.characters.map(character => (character.actor || '').trim().toLocaleLowerCase() === oldName.trim().toLocaleLowerCase() ? { ...character, actor: value } : character) }));
+    setSelectedCastName(value);
+  };
+
+  return <div className={`app ${advancedMode ? 'advanced' : ''}`}>
     <main onKeyDown={e => {
       if (e.key === 'Enter' && e.target.matches('input, textarea')) {
         e.preventDefault();
@@ -360,7 +436,7 @@ function App() {
     }}>
       <section className="title-row">
         <div>
-          <div className="eyebrow">PRODUCTION WORKSPACE</div>
+          <div className="eyebrow">DEVELOPMENT VERSION</div>
           <input className="title-input" value={plot.title} onChange={e => setPlot({ ...plot, title: e.target.value })}/>
           <p>Build your cast-to-scene microphone plan. Click any cell to change its status.</p>
         </div>
@@ -370,33 +446,42 @@ function App() {
         <div className="toolbar-left">
           {reportOpen ? <div className="report-mode-label"><Users size={16}/><strong>Read-only cast view</strong><label className="toggle"><input type="checkbox" checked={collateCast} onChange={e => setCollateCast(e.target.checked)}/><span></span> Collate multiple roles</label></div> : <>
             <label className="search"><Search size={16}/><input placeholder="Find a character or cast member…" value={query} onChange={e => setQuery(e.target.value)}/></label>
-            <div className="legend"><span><i className="dot live"></i>Onstage</span><span><i className="dot backstage"></i>Backstage singer</span><span><i className="empty-dot"></i>Off</span></div>
+            <div className="legend"><span><i className="dot live"></i>Onstage</span><span><i className="dot ensemble"></i>Ensemble</span><span><i className="dot backstage"></i>Backstage singer</span><span><i className="empty-dot"></i>Off</span></div>
           </>}
         </div>
         <div className="button-group">
           <span className={`save-state ${saved ? '' : 'saving'}`}><Check size={14}/> {saved ? 'Saved locally' : 'Saving…'}</span>
-          <button className="secondary" onClick={() => setReportOpen(value => !value)}><Users size={16}/> {reportOpen ? 'Plot view' : 'Cast view'}</button>
-          {reportOpen && <button className="secondary" onClick={exportCastPdf}><Download size={16}/> Export cast PDF</button>}
-          <button className="secondary" onClick={() => setStartupStep('manage')}><Download size={16}/> Save / Load</button>
-          {!reportOpen && <><button className="secondary" onClick={addCharacter}><Plus size={16}/> Character</button><button className="primary" onClick={addScene}><Plus size={16}/> Scene</button></>}
+          <button className="secondary" data-tooltip={reportOpen ? 'Return to the editable microphone plot' : 'View assignments grouped by cast member'} onClick={() => setReportOpen(value => !value)}><Users size={16}/> {reportOpen ? 'Plot view' : 'Cast view'}</button>
+          {reportOpen && <button className="secondary" data-tooltip="Export the current cast view and collation setting as A3 PDF" onClick={exportCastPdf}><Download size={16}/> Export cast PDF</button>}
+          <button className="secondary" data-tooltip="Open, download, export, or start a new show" onClick={() => setStartupStep('manage')}><Download size={16}/> Save / Load</button>
+          <button className="icon-help" data-tooltip="Open the Mic Plot user guide" onClick={() => setHelpOpen(true)} aria-label="Help"><CircleHelp size={18}/></button>
+          <label className="advanced-toggle" title="Enable bulk entry, groups, and scene selection"><input type="checkbox" checked={advancedMode} onChange={e => { setAdvancedMode(e.target.checked); if (!e.target.checked) { setDrawer(null); setSelectedCharacterId(null); setSelectedSceneIds([]); } }}/><span></span> Advanced</label>
+          {!reportOpen && <><button className="secondary" data-tooltip="Add one character and edit its name immediately" onClick={addCharacter}><Plus size={16}/> Character</button><button className="primary" data-tooltip="Add one scene and edit its name immediately" onClick={addScene}><Plus size={16}/> Scene</button></>}
         </div>
       </section>
+
+      {advancedMode && !reportOpen && <section className="advanced-bar">
+        <button className="bulk-add-button" data-tooltip="Open the keyboard-first bulk character entry drawer" onClick={() => { setDrawer('bulk'); setSelectedCharacterId(null); requestAnimationFrame(() => bulkNameRef.current?.focus()); }}><Plus size={15}/> Add characters</button>
+        <div className="group-actions"><span>GROUPS</span>{groupSuggestions.length ? groupSuggestions.map(group => <button key={group} title={selectedSceneIds.length ? `Cycle ${group} through ON, ENS, BSS and Off in selected scenes` : 'Select one or more scenes first'} disabled={!selectedSceneIds.length} onClick={() => toggleGroupForScenes(group)}>{group}</button>) : <em>Add default groups to characters to see them here.</em>}</div>
+        <button className="clear-selection" title="Deselect every selected scene" disabled={!selectedSceneIds.length} onClick={() => setSelectedSceneIds([])}>Clear selection</button>
+      </section>}
 
       {!reportOpen && <section className="grid-shell">
         <div className="table-scroll">
           <table style={{ '--character-width': `${characterWidth}px`, '--actor-width': `${actorWidth}px`, '--actor-left': `${26 + characterWidth}px` }}>
             <thead><tr>
               <th className="num-col">#</th><th className="character-col">CHARACTER</th><th className="actor-col">CAST MEMBER</th>
-              {plot.scenes.map((s, i) => <th className="scene-col" key={s.id}>
+              {plot.scenes.map((s, i) => <th className={`scene-col ${selectedSceneIds.includes(s.id) ? 'scene-selected' : ''}`} key={s.id}>
                 <button className="col-delete" title="Delete scene" aria-label={`Delete ${s.name}`} onClick={() => { if (confirm(`Delete “${s.name}”?`)) removeScene(s.id); }}><Trash2 size={12}/></button>
+                {advancedMode && <button className="scene-selector" aria-label={`Select ${s.name}`} onClick={() => selectScene(s.id)}><input type="checkbox" tabIndex="-1" readOnly checked={selectedSceneIds.includes(s.id)}/></button>}
                 <textarea ref={el => { if (el) sceneRefs.current[s.id] = el; }} aria-label={`Scene ${i + 1} name`} value={s.name} onChange={e => updateScene(s.id, e.target.value)} />
               </th>)}
               <th className="add-col"><button title="Add scene" onClick={addScene}><Plus/></button></th>
             </tr></thead>
             <tbody>{visible.map(c => <tr key={c.id} className={draggingId === c.id ? 'dragging' : ''} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }} onDrop={e => { e.preventDefault(); moveCharacter(draggingId || e.dataTransfer.getData('text/plain'), c.id); setDraggingId(null); }}>
-              <td className="num-col drag-handle" draggable="true" title="Drag to reorder" onDragStart={e => { setDraggingId(c.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', c.id); }} onDragEnd={() => setDraggingId(null)}>{plot.characters.findIndex(item => item.id === c.id) + 1}</td>
-              <td className="character-col"><input ref={el => { if (el) nameRefs.current[c.id] = el; }} value={c.name} onChange={e => updateCharacter(c.id, 'name', e.target.value)}/><button className="row-menu" onClick={() => removeCharacter(c.id)} title="Delete character"><Trash2 size={13}/></button></td>
-              <td className={`actor-col actor-cell ${castMenu?.id === c.id ? 'menu-open' : ''}`}>
+              <td className={`num-col drag-handle ${selectedCharacterId === c.id ? 'character-selected' : ''}`} draggable={!advancedMode} title={advancedMode ? 'Select character' : 'Drag to reorder'} onClick={() => { if (advancedMode) { setSelectedCharacterId(c.id); setDrawer('character'); } }} onDragStart={e => { if (advancedMode) { e.preventDefault(); return; } setDraggingId(c.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', c.id); }} onDragEnd={() => setDraggingId(null)}>{plot.characters.findIndex(item => item.id === c.id) + 1}</td>
+              <td className="character-col">{advancedMode ? <button className="row-value" onClick={() => { setSelectedCharacterId(c.id); setDrawer('character'); }}>{c.name}</button> : <><input ref={el => { if (el) nameRefs.current[c.id] = el; }} value={c.name} onChange={e => updateCharacter(c.id, 'name', e.target.value)}/><button className="row-menu" onClick={() => removeCharacter(c.id)} title="Delete character"><Trash2 size={13}/></button></>}</td>
+              <td className={`actor-col actor-cell ${castMenu?.id === c.id ? 'menu-open' : ''}`}>{advancedMode ? <button className="row-value cast-value" onClick={() => { setSelectedCastName(c.actor || ''); setSelectedCharacterId(null); setDrawer('cast'); }}>{c.actor || 'Uncast'}</button> : <>
                 <input
                   value={c.actor}
                   onChange={e => { updateCharacter(c.id, 'actor', e.target.value); setCastMenu({ id: c.id, highlighted: 0 }); }}
@@ -417,8 +502,9 @@ function App() {
                 {castMenu?.id === c.id && matchingCast(c.actor).length > 0 && <div className="cast-suggestions" role="listbox">
                   {matchingCast(c.actor).map((name, index) => <button type="button" role="option" aria-selected={castMenu.highlighted === index} className={castMenu.highlighted === index ? 'highlighted' : ''} key={name} onMouseDown={e => { e.preventDefault(); chooseCast(c.id, name); }}>{name}</button>)}
                 </div>}
+                </>}
               </td>
-              {plot.scenes.map(s => { const raw = plot.cells[`${c.id}:${s.id}`]; const st = raw === 'on' || raw === 'bss' ? raw : 'off'; return <td className="plot-cell" key={s.id}><button aria-label={`${c.name}, ${s.name}: ${st}`} className={`state ${st}`} onClick={() => updateCell(c.id, s.id)}>{labels[st]}</button></td> })}
+              {plot.scenes.map(s => { const raw = plot.cells[`${c.id}:${s.id}`]; const st = ['on', 'ens', 'bss'].includes(raw) ? raw : 'off'; return <td className="plot-cell" key={s.id}><button title={`${c.name} · ${s.name}: ${labels[st] || 'Off'}. Click for ${labels[stateOrder[(stateOrder.indexOf(st) + 1) % stateOrder.length]] || 'Off'}.`} aria-label={`${c.name}, ${s.name}: ${st}`} className={`state ${st}`} onClick={() => updateCell(c.id, s.id)}>{labels[st]}</button></td> })}
               <td className="add-col"></td>
             </tr>)}
               <tr className="add-character-row"><td colSpan={plot.scenes.length + 4}><button onClick={addCharacter}><Plus size={14}/> Add character</button></td></tr>
@@ -439,6 +525,46 @@ function App() {
         </div>
       </section>}
     </main>
+    {advancedMode && drawer && !reportOpen && <aside className="advanced-drawer">
+      <div className="drawer-heading"><div><span>ADVANCED MODE</span><h3>{drawer === 'bulk' ? 'Quick add characters' : drawer === 'cast' ? 'Cast details' : 'Character details'}</h3></div><button onClick={() => setDrawer(null)} aria-label="Close drawer">×</button></div>
+      {drawer === 'bulk' ? <>
+        <p>Use Tab to move through the fields. Tab from Default group adds the character and starts the next one.</p>
+        <div className="drawer-fields">
+          <label>Character name<input ref={bulkNameRef} value={bulkDraft.name} onChange={e => setBulkDraft({ ...bulkDraft, name: e.target.value })} onKeyDown={e => { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); bulkActorRef.current?.focus(); } if (e.key === 'Enter') { e.preventDefault(); addBulkCharacter(); } }} placeholder="Character name"/></label>
+          <label>Cast name<SmartField ref={bulkActorRef} value={bulkDraft.actor} onChange={value => setBulkDraft(current => ({ ...current, actor: value }))} suggestions={castSuggestions} onAdvance={() => bulkGroupRef.current?.focus()} onSubmit={() => addBulkCharacter()} placeholder="Cast member"/></label>
+          <label>Default group<SmartField ref={bulkGroupRef} value={bulkDraft.defaultGroup} onChange={value => setBulkDraft(current => ({ ...current, defaultGroup: value }))} suggestions={groupSuggestions} onAdvance={addBulkCharacter} onSubmit={value => addBulkCharacter(value)} placeholder="Optional group"/></label>
+        </div>
+        <button className="primary drawer-add" disabled={!bulkDraft.name.trim()} onClick={() => addBulkCharacter()}><Plus size={15}/> Add character</button>
+      </> : drawer === 'cast' ? <>
+        <p>Edit this cast name for every linked character, or choose a role to open its character details.</p>
+        <div className="drawer-fields"><label>Cast name<SmartField value={selectedCastName} onChange={renameSelectedCast} suggestions={castSuggestions.filter(name => name.toLocaleLowerCase() !== selectedCastName.toLocaleLowerCase())} placeholder="Uncast"/></label></div>
+        <div className="cast-role-list"><span>CHARACTERS PLAYED</span>{selectedCastCharacters.map(character => <button key={character.id} onClick={() => { setSelectedCharacterId(character.id); setDrawer('character'); }}><strong>{character.name}</strong><small>{character.defaultGroup || 'No default group'}</small></button>)}</div>
+      </> : selectedCharacter ? <>
+        <p>Changes are saved immediately to this character.</p>
+        <div className="drawer-fields">
+          <label>Character name<input value={selectedCharacter.name} onChange={e => updateCharacter(selectedCharacter.id, 'name', e.target.value)} /></label>
+          <label>Cast name<SmartField value={selectedCharacter.actor} onChange={value => updateCharacter(selectedCharacter.id, 'actor', value)} suggestions={castSuggestions.filter(name => name !== selectedCharacter.actor)} /></label>
+          <label>Default group<SmartField value={selectedCharacter.defaultGroup || ''} onChange={value => updateCharacter(selectedCharacter.id, 'defaultGroup', value)} suggestions={groupSuggestions.filter(group => group !== selectedCharacter.defaultGroup)} onAdvance={() => document.activeElement?.blur()} /></label>
+        </div>
+        <button className="drawer-delete" tabIndex="-1" onClick={() => { if (confirm(`Delete ${selectedCharacter.name}?`)) { removeCharacter(selectedCharacter.id); setSelectedCharacterId(null); setDrawer(null); } }}><Trash2 size={14}/> Delete character</button>
+      </> : null}
+    </aside>}
+    {helpOpen && <div className="help-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setHelpOpen(false); }}>
+      <section className="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <div className="help-heading"><div><span>MIC PLOT GUIDE</span><h2 id="help-title">How to use the app</h2></div><button onClick={() => setHelpOpen(false)} aria-label="Close help"><X size={18}/></button></div>
+        <div className="help-grid">
+          <article><strong>1</strong><div><h3>Build the plot</h3><p>Add characters and scenes from the toolbar. Names are edited directly in Standard Mode. Click a plot cell to cycle <b>Off → ON → ENS → BSS</b>.</p></div></article>
+          <article><strong>2</strong><div><h3>Understand the states</h3><p><i className="help-swatch on"></i>ON is onstage, <i className="help-swatch ens"></i>ENS is ensemble, and <i className="help-swatch bss"></i>BSS is backstage singer. An empty cell is Off.</p></div></article>
+          <article><strong>3</strong><div><h3>Work quickly</h3><p>Drag row numbers to reorder characters. Cast fields suggest existing names. Press Enter to accept text and leave a field.</p></div></article>
+          <article><strong>4</strong><div><h3>Advanced Mode</h3><p>Use Add Characters for keyboard-first bulk entry. Tab accepts the best suggestion; Enter preserves exactly what you typed and creates the character.</p></div></article>
+          <article><strong>5</strong><div><h3>Groups and scenes</h3><p>Give characters a Default Group, select scene checkboxes, then press a group button to cycle that group through ON, ENS, BSS, and Off.</p></div></article>
+          <article><strong>6</strong><div><h3>Cast View</h3><p>View the plot grouped by performer. Collate multiple roles to combine them; the strongest assignment wins: ON, then ENS, then BSS.</p></div></article>
+          <article><strong>7</strong><div><h3>Save and export</h3><p>Your current show autosaves in this browser. Download a <b>.micplot</b> file for an editable backup, or export CSV and A3 PDFs.</p></div></article>
+        </div>
+        <div className="help-support"><h3>Issues and feature requests</h3><p>If you have any issues or features that you want added, please submit a feature request on the public GitHub repository.</p><a href="https://github.com/staljabro/Mic-Plot-Generator/" target="_blank" rel="noopener noreferrer">Open Mic Plot Generator on GitHub ↗</a></div>
+        <div className="help-footer"><span><b>Created by Joshua Braithwaite</b><br/>Tip: hover over controls for a quick explanation.</span><button className="primary" onClick={() => setHelpOpen(false)}>Got it</button></div>
+      </section>
+    </div>}
     {startupStep && <div className="modal-backdrop">
       <section className="startup-modal" role="dialog" aria-modal="true" aria-labelledby="startup-title">
         {startupStep === 'choose' && <>
