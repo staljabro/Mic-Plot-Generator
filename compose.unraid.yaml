@@ -7,5 +7,5 @@ services:
       - "8087:80"
     restart: unless-stopped
     labels:
-      net.unraid.docker.icon: "http://[IP]:[PORT:8087]/icon.png"
+      net.unraid.docker.icon: "https://raw.githubusercontent.com/staljabro/Mic-Plot-Generator/main/public/icon.png"
       net.unraid.docker.webui: "http://[IP]:[PORT:8087]"
