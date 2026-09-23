@@ -1,0 +1,8 @@
+services:
+  mic-plot-generator:
+    image: ghcr.io/staljabro/mic-plot-generator:latest
+    pull_policy: always
+    container_name: mic-plot-generator
+    ports:
+      - "8080:80"
+    restart: unless-stopped
