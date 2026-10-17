@@ -30,6 +30,9 @@ test('new shows start with only required Off and On states', () => {
   assert.deepEqual(plot.states.map(state => state.id), ['off', 'on']);
   assert.deepEqual(plot.characters, []);
   assert.deepEqual(plot.scenes, []);
+  assert.deepEqual(plot.groups, []);
+  assert.equal(plot.showLogo, '');
+  assert.equal(plot.showLogo2, '');
 });
 
 test('normalisation preserves custom state order and locks required labels', () => {
@@ -41,4 +44,16 @@ test('normalisation preserves custom state order and locks required labels', () 
 
 test('tabular paste accepts an optional header', () => {
   assert.deepEqual(parseTabular('Character\tCast member\tGroup\nHamlet\tAlex\tLeads'), [{ name: 'Hamlet', actor: 'Alex', defaultGroup: 'Leads' }]);
+});
+
+test('normalisation preserves reusable character groups without duplicates', () => {
+  const plot = normalisePlot({ characters: [], scenes: [], cells: {}, groups: [' Leads ', 'Leads', '', 'Chorus'] });
+  assert.deepEqual(plot.groups, ['Leads', 'Chorus']);
+});
+
+test('normalisation only preserves supported embedded show logos', () => {
+  const png = 'data:image/png;base64,AAAA';
+  assert.equal(normalisePlot({ characters: [], scenes: [], cells: {}, showLogo: png }).showLogo, png);
+  assert.equal(normalisePlot({ characters: [], scenes: [], cells: {}, showLogo: 'https://example.com/logo.png' }).showLogo, '');
+  assert.equal(normalisePlot({ characters: [], scenes: [], cells: {}, showLogo2: png }).showLogo2, png);
 });

@@ -1,76 +1,99 @@
 # Mic Plot Generator
 
-A local-first React tool for creating cast-to-scene microphone plots. Each show
-can define its own colour-coded cell states from a coordinated palette. It also
-includes undo/redo, multiple on-device shows and recovery snapshots, bulk setup
-for characters and scenes, spreadsheet paste, cast collation, configurable
-PDF/CSV export, print preview, and responsive keyboard-accessible editing.
+Mic Plot Generator is a local-first React app for building character-to-scene
+microphone plots. Version 1.0.0 supports configurable cue states, two editing
+modes, reusable groups, cast-based review, multiple locally saved shows,
+recovery snapshots, portable `.micplot` files, CSV output, and full-document
+PDF preview and export.
+
+## Use the app
+
+1. Create a show with its company and production name.
+2. Complete **Show Setup**:
+   - configure the required Off and On states and add custom coloured states;
+   - upload up to two show logos;
+   - add or bulk-paste characters, cast members, and optional groups;
+   - add scenes; and
+   - drag states, characters, and scenes into their required order.
+3. Build the plot in **Direct Edit**, or use **Mass Edit** to select and update
+   many cells together.
+4. Select scene headings when applying character-group controls, and use the
+   scene edit icon when scene properties need changing.
+5. Open **Cast View** to review assignments grouped by performer.
+6. Open **Save / Load** to manage shows, backups, recovery snapshots, and
+   exports.
+7. Choose **Export PDF** to configure and preview every page before download.
+   Cast layout, a blank Mic # column, Logo 1 on the left, and Logo 2 on the
+   right are the defaults when those logos exist.
+
+Data autosaves in the current browser. Download `.micplot` backups regularly;
+browser storage should not be the only copy of an important show.
+
+## Current capabilities
+
+- Per-show cell states with fixed Off/On labels, custom short names, a
+  coordinated 15-colour palette, and drag ordering.
+- Empty new shows with keyboard-friendly character entry and bulk paste.
+- Draggable character and scene ordering shared by the plot and exports.
+- Direct editing with cell cycling, drag painting, arrow-key navigation, and
+  numeric state shortcuts.
+- Mass editing with click/drag selection, additive scene selection, group-cell
+  selection, visible overlays, and Escape-to-clear.
+- Character and scene inspectors, undo/redo, autosave status, and destructive
+  change confirmations.
+- Cast View with optional multi-role collation.
+- A local show library, bounded recovery snapshots, and portable `.micplot`
+  import/export.
+- Character or cast PDF layouts, optional Character # and Mic # columns,
+  repeated headers across pages, auto-sized columns, coloured legends, page
+  counts, dual logos, and exact multi-page preview.
+- CSV export and browser printing.
 
 ## Documentation
 
-- [User guide](docs/user-guide.md)
-- [Development and releases](docs/development.md)
-- [Docker and Unraid deployment](docs/deployment.md)
+1. Start with the [step-by-step user guide](docs/user-guide.md).
+2. For local development and releases, follow
+   [Development and releases](docs/development.md).
+3. For Docker or Unraid, follow the [deployment guide](docs/deployment.md).
 
-The current release number is maintained in [`src/version.js`](src/version.js).
+The release source of truth is [`src/version.js`](src/version.js). For version
+1.0.0, npm metadata, the app display, GitHub Actions, Docker tags, and OCI image
+labels all use the same value.
 
-## Development
+## Run locally
+
+Requirements: Node.js 22 or newer and npm.
 
 ```bash
 npm ci
 npm run dev
+```
+
+Before committing a change, run:
+
+```bash
 npm run check
 ```
 
-`npm run check` runs the data-model and persistence tests, followed by a
-production build. Show data remains in the browser unless a `.micplot` file is
-downloaded by the user.
+This runs the automated tests and production build.
 
-## Published Docker image
+## Run the published image
 
-Every push to `main` builds the application and publishes an `amd64` image to:
+1. Make the GHCR package public, or configure a token with `read:packages`.
+2. Start the included Compose definition:
 
-```text
-ghcr.io/staljabro/mic-plot-generator:latest
-```
+   ```bash
+   docker compose -f compose.unraid.yaml up -d
+   ```
 
-Every published build also receives the version tag declared in
-`src/version.js` and an immutable `:sha-...` tag. A pushed Git tag must match
-that version exactly—for example, `v0.2.0`—or the workflow fails. Pull requests
-build the image as a check but do not publish it.
+3. Open port `8087` on the Docker host.
+4. To update, pull and recreate the container:
 
-The first successful workflow run creates the package in GitHub Container
-Registry. In the package settings, make the package public if the Unraid server
-should pull it without GitHub credentials. If it remains private, configure
-Unraid with a GitHub personal access token that has `read:packages` permission.
+   ```bash
+   docker compose -f compose.unraid.yaml pull
+   docker compose -f compose.unraid.yaml up -d
+   ```
 
-## Run on Unraid
-
-The provided `compose.unraid.yaml` publishes the site on port `8087`. Change the
-left-hand port if needed, then deploy it with Unraid Compose Manager (or another
-Compose integration):
-
-```bash
-docker compose -f compose.unraid.yaml up -d
-```
-
-`pull_policy: always` makes each `docker compose up` check GHCR and recreate the
-container when the image changed. Configure the Compose stack to autostart if it
-should check for a new image when the Unraid server starts.
-
-To update it manually without copying repository files:
-
-```bash
-docker compose -f compose.unraid.yaml pull
-docker compose -f compose.unraid.yaml up -d
-```
-
-Docker's plain **Restart** operation does not pull images; it only restarts the
-existing container. If using Unraid's standard Docker tab instead of Compose,
-set the Repository field to `ghcr.io/staljabro/mic-plot-generator:latest`, map a
-host port to container port `80`, and use **Check for Updates / Update**. For
-unattended deployments, enable Unraid's container auto-update feature or the
-widely used CA Auto Update Applications plugin for this container.
-
-See [the deployment guide](docs/deployment.md) for version-pinned images and
-release details.
+The default image is `ghcr.io/staljabro/mic-plot-generator:latest`. Pin
+`:v1.0.0` or an immutable `:sha-...` tag when reproducibility matters. Docker's
+plain Restart action does not pull a newer image.

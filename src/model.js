@@ -18,7 +18,7 @@ export function cycleState(states, value) {
 export function createBlankPlot(company, showName) {
   return {
     id: crypto.randomUUID(), company, showName, title: `${company} - ${showName}`,
-    scenes: [], characters: [],
+    scenes: [], characters: [], groups: [], showLogo: '', showLogo2: '',
     states: DEFAULT_STATES.map(state => ({ ...state })), cells: {}
   };
 }
@@ -73,7 +73,10 @@ export function normalisePlot(input) {
     company: String(input.company || '').slice(0, 200),
     showName: String(input.showName || input.title || 'Untitled Production').slice(0, 200),
     title: String(input.title || input.showName || 'Untitled Production').slice(0, 300),
-    characters, scenes, states, cells
+    showLogo: /^data:image\/(png|jpeg|webp);base64,/i.test(input.showLogo || '') && String(input.showLogo).length < 3_000_000 ? String(input.showLogo) : '',
+    showLogo2: /^data:image\/(png|jpeg|webp);base64,/i.test(input.showLogo2 || '') && String(input.showLogo2).length < 3_000_000 ? String(input.showLogo2) : '',
+    characters, scenes, states, cells,
+    groups: [...new Set((Array.isArray(input.groups) ? input.groups : []).map(value => String(value).trim().slice(0, 100)).filter(Boolean))]
   };
 }
 

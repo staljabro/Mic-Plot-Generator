@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Check, CircleHelp, Download, GripVertical, Plus, Redo2, Search, Settings, Trash2, Undo2, Users, X } from 'lucide-react';
+import { Check, CircleHelp, Download, GripVertical, Pencil, Plus, Redo2, Search, Settings, Trash2, Undo2, Users, X } from 'lucide-react';
 import './styles.css';
 import './dark-theme.css';
 import { cleanFilename, collateCastRows, createBlankPlot, cycleState, DEFAULT_STATES, normalisePlot, parseTabular, removeCharacterFromPlot, removeSceneFromPlot } from './model.js';
@@ -101,7 +101,7 @@ function loadSession() {
 
 function App() {
   const [session] = useState(loadSession);
-  const { plot, setPlot, resetPlot, undo, redo, canUndo, canRedo } = usePlotHistory(session.plot);
+  const { plot, setPlot, resetPlot, undo, redo, canUndo, canRedo, undoLabel, redoLabel } = usePlotHistory(session.plot);
   const [startupStep, setStartupStep] = useState(session.hasCurrent ? null : 'choose');
   const [newShow, setNewShow] = useState({ company: '', name: '' });
   const [loadError, setLoadError] = useState('');
@@ -127,13 +127,21 @@ function App() {
   const [paintState, setPaintState] = useState(null);
   const [libraryRevision, setLibraryRevision] = useState(0);
   const [saveMessage, setSaveMessage] = useState('Saved locally');
-  const [pdfOptions, setPdfOptions] = useState({ format: 'a3', orientation: 'landscape', fontSize: 6.5, selectedOnly: false, includeLegend: true });
+  const [pdfOptions, setPdfOptions] = useState({ format: 'a3', orientation: 'landscape', fontSize: 6.5, selectedOnly: false, includeLegend: true, logoPosition: 'left', logo2Position: 'right', dataLayout: 'cast', showCharacterNumber: false, showMicNumber: true });
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState('');
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState('');
+  const [pdfPreviewPages, setPdfPreviewPages] = useState(0);
+  const [pdfPreviewScale, setPdfPreviewScale] = useState('page-width');
   const [setupTab, setSetupTab] = useState('show');
   const [setupCharacter, setSetupCharacter] = useState({ name: '', actor: '', defaultGroup: '' });
   const [setupSceneName, setSetupSceneName] = useState('');
   const [stateDraft, setStateDraft] = useState({ name: '', abbreviation: '', color: STATE_COLORS[2] });
   const [colorPickerId, setColorPickerId] = useState(null);
   const [setupDragging, setSetupDragging] = useState(null);
+  const [stateTemplateId, setStateTemplateId] = useState('');
+  const [groupTemplateId, setGroupTemplateId] = useState('');
   const lastBackupRef = useRef(0);
   const massDraggingRef = useRef(false);
   const stateById = Object.fromEntries(plot.states.map(state => [state.id, state]));
@@ -145,10 +153,13 @@ function App() {
   const setupCharacterNameRef = useRef(null);
   const setupCharacterActorRef = useRef(null);
   const setupCharacterGroupRef = useRef(null);
+  const showLogoInputRef = useRef(null);
+  const showLogo2InputRef = useRef(null);
 
   useEffect(() => {
     if (!plot.id) return;
     setSaved(false);
+    setSaveMessage('Saving changes…');
     const id = setTimeout(() => {
       try {
         const shouldBackup = Date.now() - lastBackupRef.current > 5 * 60 * 1000;
@@ -197,31 +208,62 @@ function App() {
 
   const visible = useMemo(() => plot.characters.filter(c => `${c.name} ${c.actor}`.toLowerCase().includes(query.toLowerCase())), [plot.characters, query]);
   const castSuggestions = useMemo(() => [...new Set(plot.characters.map(c => c.actor.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [plot.characters]);
-  const groupSuggestions = useMemo(() => [...new Set(plot.characters.map(c => (c.defaultGroup || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [plot.characters]);
+  const groupSuggestions = useMemo(() => [...new Set([...(plot.groups || []), ...plot.characters.map(c => (c.defaultGroup || '').trim())].filter(Boolean))].sort((a, b) => a.localeCompare(b)), [plot.characters, plot.groups]);
   const activeCount = Object.values(plot.cells).filter(value => value !== 'off' && stateById[value]).length;
   const characterWidth = Math.max(50, Math.ceil(Math.max('CHARACTER'.length, ...plot.characters.map(c => c.name.length)) * 6.2 + 24));
   const actorWidth = Math.max(50, Math.ceil(Math.max('CAST MEMBER'.length, ...plot.characters.map(c => c.actor.length)) * 6.2 + 24));
   const castReportRows = useMemo(() => collateCastRows(plot, collateCast), [plot, collateCast]);
   const storedShows = useMemo(() => listStoredPlots(), [libraryRevision, startupStep]);
   const backups = useMemo(() => plot.id ? getBackups(plot.id) : [], [plot.id, libraryRevision, startupStep]);
+  const templateShows = storedShows.filter(item => item.plot.id !== plot.id);
+  const setupChecks = [
+    { label: 'Show details', done: Boolean(plot.company.trim() && plot.showName.trim()), tab: 'show' },
+    { label: 'Characters', done: plot.characters.length > 0, tab: 'characters' },
+    { label: 'Scenes', done: plot.scenes.length > 0, tab: 'scenes' }
+  ];
 
   useEffect(() => { localStorage.setItem('mic-plot-collate-cast', String(collateCast)); }, [collateCast]);
   useEffect(() => {
     const onKeyDown = event => {
-      if (event.key === 'Escape') { setHelpOpen(false); setDrawer(null); setCastMenu(null); setSelectedCells([]); setSelectedSceneIds([]); setSelectedSceneId(null); setCellAnchor(null); if (startupStep === 'setup') setStartupStep(null); }
+      if (event.key === 'Escape') {
+        if (pdfPreviewOpen) { setPdfPreviewOpen(false); return; }
+        setHelpOpen(false); setDrawer(null); setCastMenu(null); setSelectedCells([]); setSelectedSceneIds([]); setSelectedSceneId(null); setCellAnchor(null); if (startupStep === 'setup') setStartupStep(null);
+      }
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(); }
       if ((event.ctrlKey || event.metaKey) && ((event.shiftKey && event.key.toLowerCase() === 'z') || event.key.toLowerCase() === 'y')) { event.preventDefault(); redo(); }
-      if (!event.target.matches('input, textarea, select') && selectedCells.length) {
+      const typing = event.target.matches('input, textarea, select');
+      const plainKey = !typing && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const plotKey = plainKey && !startupStep && !drawer && !helpOpen && !reportOpen && !pdfPreviewOpen;
+      if (plainKey && event.key.toLowerCase() === 'd') { event.preventDefault(); setEditMode('direct'); setSelectedCells([]); }
+      if (plainKey && event.key.toLowerCase() === 'm') { event.preventDefault(); setEditMode('mass'); setCellAnchor(null); }
+      if (!event.target.matches('input, textarea, select') && (event.key === 'Delete' || event.key === 'Backspace') && selectedCells.length) { event.preventDefault(); applyStateToSelection('off'); }
+      if (plotKey && editMode === 'direct' && cellAnchor && event.key.startsWith('Arrow')) {
+        const [characterId, sceneId] = cellAnchor.split(':');
+        const row = visible.findIndex(item => item.id === characterId);
+        const column = plot.scenes.findIndex(item => item.id === sceneId);
+        if (row >= 0 && column >= 0) {
+          const nextRow = Math.max(0, Math.min(visible.length - 1, row + (event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0)));
+          const nextColumn = Math.max(0, Math.min(plot.scenes.length - 1, column + (event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0)));
+          const nextKey = `${visible[nextRow].id}:${plot.scenes[nextColumn].id}`;
+          event.preventDefault();
+          setCellAnchor(nextKey);
+          requestAnimationFrame(() => document.querySelector(`[data-cell-key="${nextKey}"]`)?.focus({ preventScroll: true }));
+        }
+      }
+      if (plotKey && editMode === 'direct' && cellAnchor) {
+        const index = Number(event.key);
+        if (Number.isInteger(index) && plot.states[index]) { event.preventDefault(); setCellState(cellAnchor, plot.states[index].id); }
+      } else if (plotKey && selectedCells.length) {
         const index = Number(event.key);
         if (Number.isInteger(index) && plot.states[index]) { event.preventDefault(); applyStateToSelection(plot.states[index].id); }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [undo, redo, selectedCells, plot.states, startupStep]);
+  }, [undo, redo, selectedCells, plot.states, plot.scenes, visible, startupStep, drawer, helpOpen, reportOpen, pdfPreviewOpen, editMode, cellAnchor]);
 
   useEffect(() => {
-    const selector = helpOpen ? '.help-panel' : startupStep ? '.startup-modal' : drawer ? '.advanced-drawer' : null;
+    const selector = pdfPreviewOpen ? '.pdf-preview-dialog' : helpOpen ? '.help-panel' : startupStep ? '.startup-modal' : drawer ? '.advanced-drawer' : null;
     if (!selector) return;
     const container = document.querySelector(selector);
     if (!container) return;
@@ -238,7 +280,7 @@ function App() {
     };
     container.addEventListener('keydown', trap);
     return () => { container.removeEventListener('keydown', trap); previous?.focus?.(); };
-  }, [helpOpen, startupStep, drawer]);
+  }, [pdfPreviewOpen, helpOpen, startupStep, drawer]);
 
   useEffect(() => {
     if (!colorPickerId) return;
@@ -322,6 +364,27 @@ function App() {
   };
   const updateState = (id, field, value) => setPlot(p => ({ ...p, states: p.states.map(state => state.id === id ? { ...state, [field]: value } : state) }));
   const removeState = id => setPlot(p => ({ ...p, states: p.states.filter(state => state.id !== id), cells: Object.fromEntries(Object.entries(p.cells).map(([key, value]) => [key, value === id ? 'off' : value])) }));
+  const stateUseCount = id => Object.values(plot.cells).filter(value => value === id).length;
+  const characterUseCount = id => plot.scenes.filter(scene => (plot.cells[`${id}:${scene.id}`] || 'off') !== 'off').length;
+  const sceneUseCount = id => plot.characters.filter(character => (plot.cells[`${character.id}:${id}`] || 'off') !== 'off').length;
+  const confirmRemoveState = state => confirm(`Remove “${state.name}”? ${stateUseCount(state.id)} cue assignment${stateUseCount(state.id) === 1 ? '' : 's'} will be reset to Off.`);
+  const confirmRemoveCharacter = character => confirm(`Delete “${character.name}”? ${characterUseCount(character.id)} cue assignment${characterUseCount(character.id) === 1 ? '' : 's'} will also be removed.`);
+  const confirmRemoveScene = scene => confirm(`Delete “${scene.name}”? ${sceneUseCount(scene.id)} cue assignment${sceneUseCount(scene.id) === 1 ? '' : 's'} will also be removed.`);
+  const copyStateTemplate = () => {
+    const source = storedShows.find(item => item.plot.id === stateTemplateId)?.plot;
+    if (!source) return;
+    const sourceStates = normalisePlot(source).states.map(state => ({ ...state }));
+    const validIds = new Set(sourceStates.map(state => state.id));
+    const resetCount = Object.values(plot.cells).filter(value => !validIds.has(value) && value !== 'off').length;
+    if (!confirm(`Use the state set from “${source.title}”?${resetCount ? ` ${resetCount} assignment${resetCount === 1 ? '' : 's'} using unavailable states will be reset to Off.` : ''}`)) return;
+    setPlot(p => ({ ...p, states: sourceStates, cells: Object.fromEntries(Object.entries(p.cells).map(([key, value]) => [key, validIds.has(value) ? value : 'off'])) }));
+  };
+  const copyGroupTemplate = () => {
+    const source = storedShows.find(item => item.plot.id === groupTemplateId)?.plot;
+    if (!source) return;
+    const groups = [...new Set([...(source.groups || []), ...source.characters.map(character => (character.defaultGroup || '').trim())].filter(Boolean))];
+    setPlot(p => ({ ...p, groups: [...new Set([...(p.groups || []), ...groups])].sort((a, b) => a.localeCompare(b)) }));
+  };
   const moveState = (fromId, toId) => {
     if (!fromId || fromId === toId) return;
     setPlot(p => {
@@ -339,6 +402,28 @@ function App() {
     next.title = `${field === 'company' ? value : p.company} - ${field === 'showName' ? value : p.showName}`;
     return next;
   });
+  const uploadShowLogo = (file, slot = 'showLogo') => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setSaveMessage('Logo must be an image file'); return; }
+    const source = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 800 / image.width, 320 / image.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      setPlot(p => ({ ...p, [slot]: canvas.toDataURL('image/png') }));
+      setPdfOptions(options => slot === 'showLogo'
+        ? { ...options, logoPosition: options.logoPosition === 'off' ? (options.logo2Position === 'left' ? 'right' : 'left') : options.logoPosition }
+        : { ...options, logo2Position: options.logo2Position === 'off' ? (options.logoPosition === 'right' ? 'left' : 'right') : options.logo2Position });
+      URL.revokeObjectURL(source);
+      const input = slot === 'showLogo' ? showLogoInputRef.current : showLogo2InputRef.current;
+      if (input) input.value = '';
+    };
+    image.onerror = () => { URL.revokeObjectURL(source); setSaveMessage('Logo image could not be read'); };
+    image.src = source;
+  };
   const updateCharacter = (id, field, value) => setPlot(p => ({ ...p, characters: p.characters.map(c => c.id === id ? { ...c, [field]: value } : c) }));
   const updateScene = (id, value) => setPlot(p => ({ ...p, scenes: p.scenes.map(s => s.id === id ? { ...s, name: value } : s) }));
   const removeCharacter = id => setPlot(p => removeCharacterFromPlot(p, id));
@@ -379,13 +464,26 @@ function App() {
       return { ...p, cells };
     });
   };
+  const toggleGroupSelection = group => {
+    if (!selectedSceneIds.length) return;
+    const members = plot.characters.filter(character => character.defaultGroup === group);
+    const keys = members.flatMap(character => selectedSceneIds.map(sceneId => `${character.id}:${sceneId}`));
+    setSelectedCells(current => {
+      const currentSet = new Set(current);
+      const remove = keys.length > 0 && keys.every(key => currentSet.has(key));
+      keys.forEach(key => remove ? currentSet.delete(key) : currentSet.add(key));
+      return [...currentSet];
+    });
+  };
   const selectMassCell = key => {
     setSelectedCells(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
     setCellAnchor(key);
   };
   const addMassCell = key => setSelectedCells(current => current.includes(key) ? current : [...current, key]);
-  const inspectScene = (id, append) => {
-    setSelectedSceneIds(current => append ? (current.includes(id) ? current.filter(item => item !== id) : [...current, id]) : [id]);
+  const selectSceneHeading = id => {
+    setSelectedSceneIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  };
+  const inspectScene = id => {
     setSelectedSceneId(id);
     setSelectedCharacterId(null);
     setDrawer('scene');
@@ -454,61 +552,182 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(a.href), 0);
   };
 
-  const exportPdf = async () => {
-    try {
+  const buildPdf = async () => {
     const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
     const scenes = pdfOptions.selectedOnly && selectedSceneIds.length ? plot.scenes.filter(scene => selectedSceneIds.includes(scene.id)) : plot.scenes;
     const doc = new jsPDF({ orientation: pdfOptions.orientation, unit: 'mm', format: pdfOptions.format });
-    const head = [['#', 'Character', 'Cast member', ...scenes.map(s => s.name)]];
-    const body = plot.characters.map((character, index) => [
-      String(index + 1),
-      character.name,
-      character.actor,
-      ...scenes.map(scene => labels[plot.cells[`${character.id}:${scene.id}`] || 'off'])
-    ]);
+    const stateValues = character => scenes.map(scene => labels[plot.cells[`${character.id}:${scene.id}`] || 'off']);
+    let identityHeaders;
+    let body;
+    const continuationCells = new Set();
+    if (pdfOptions.dataLayout === 'cast') {
+      const groups = new Map();
+      plot.characters.forEach((character, characterIndex) => {
+        const actor = character.actor.trim();
+        const key = actor ? actor.toLocaleLowerCase() : `unassigned:${character.id}`;
+        if (!groups.has(key)) groups.set(key, { actor: actor || 'Uncast', characters: [] });
+        const group = groups.get(key);
+        group.characters.push({ character, characterIndex });
+      });
+      const orderedGroups = [...groups.values()];
+      identityHeaders = ['Channel #', ...(pdfOptions.showMicNumber ? ['Mic #'] : []), 'Cast member', ...(pdfOptions.showCharacterNumber ? ['Character #'] : []), 'Character'];
+      let castRowIndex = 0;
+      body = orderedGroups.flatMap((group, groupIndex) => group.characters.map(({ character, characterIndex }, roleIndex) => {
+        const row = [
+          roleIndex === 0 ? String(groupIndex + 1) : '',
+          ...(pdfOptions.showMicNumber ? [''] : []),
+          roleIndex === 0 ? group.actor : '',
+          ...(pdfOptions.showCharacterNumber ? [String(characterIndex + 1)] : []),
+          character.name,
+          ...stateValues(character)
+        ];
+        if (roleIndex > 0) {
+          continuationCells.add(`${castRowIndex}:${pdfOptions.showMicNumber ? 2 : 1}`);
+        }
+        castRowIndex += 1;
+        return row;
+      }));
+    } else {
+      identityHeaders = ['#', 'Character', 'Cast member'];
+      body = plot.characters.map((character, index) => [String(index + 1), character.name, character.actor, ...stateValues(character)]);
+    }
+    const sceneColumnStart = identityHeaders.length;
+    const head = [[...identityHeaders, ...scenes.map(scene => scene.name)]];
+    const measureColumn = (values, fontSize = pdfOptions.fontSize, fontStyle = 'normal') => {
+      doc.setFont('helvetica', fontStyle);
+      doc.setFontSize(fontSize);
+      return Math.max(...values.map(value => doc.getTextWidth(String(value || ''))), 1) + 3;
+    };
+    const centeredHeaders = new Set(['#', 'Channel #', 'Mic #', 'Character #']);
+    const verticalIdentityHeaders = new Set(pdfOptions.dataLayout === 'cast' ? ['Channel #', 'Mic #', 'Character #'] : []);
+    const verticalHeaderIndices = new Set(identityHeaders.flatMap((header, index) => verticalIdentityHeaders.has(header) ? [index] : []));
+    const columnStyles = Object.fromEntries(identityHeaders.map((header, index) => [index, {
+      cellWidth: verticalIdentityHeaders.has(header) ? Math.max(7, measureColumn(body.map(row => row[index]))) : measureColumn([header, ...body.map(row => row[index])]),
+      ...(centeredHeaders.has(header) ? { halign: 'center' } : {})
+    }]));
+    scenes.forEach((scene, index) => {
+      columnStyles[index + sceneColumnStart] = { cellWidth: Math.max(7, measureColumn(body.map(row => row[index + sceneColumnStart]), pdfOptions.fontSize, 'bold')), halign: 'center' };
+    });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(5.5);
+    const verticalHeaderHeight = Math.max(18, ...scenes.map(scene => doc.getTextWidth(scene.name) + 6), ...[...verticalHeaderIndices].map(index => doc.getTextWidth(identityHeaders[index]) + 6));
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const makeLogoMetrics = (image, position) => {
+      if (!image || position === 'off') return null;
+      try {
+        const properties = doc.getImageProperties(image);
+        let height = 40;
+        let width = height * properties.width / properties.height;
+        if (width > 75) { width = 75; height = width * properties.height / properties.width; }
+        return { image, position, width, height, x: position === 'left' ? 14 : pageWidth - 14 - width, y: 7 };
+      } catch { return null; }
+    };
+    const logos = [makeLogoMetrics(plot.showLogo, pdfOptions.logoPosition), makeLogoMetrics(plot.showLogo2, pdfOptions.logo2Position)].filter(Boolean);
+    const leftLogo = logos.find(logo => logo.position === 'left');
+    const rightLogo = logos.find(logo => logo.position === 'right');
+    const headerTextX = leftLogo ? leftLogo.x + leftLogo.width + 8 : 10;
+    const headerRightEdge = rightLogo ? rightLogo.x - 8 : pageWidth - 10;
+    const logoAreaTop = logos.length ? Math.min(...logos.map(logo => logo.y)) : 3;
+    const imageBottom = logos.length ? Math.max(...logos.map(logo => logo.y + logo.height)) : 16;
+    const headerMidpoint = (logoAreaTop + imageBottom) / 2;
+    const headerTitleY = logos.length ? headerMidpoint - 1.25 : 10;
+    const headerDetailY = headerTitleY + 6;
+    const legendLayout = () => {
+      if (!pdfOptions.includeLegend) return { items: [], bottom: headerDetailY };
+      doc.setFontSize(6.5);
+      let x = headerTextX; let row = 0;
+      const items = plot.states.map(state => {
+        const shortName = state.abbreviation || 'OFF';
+        const badgeWidth = Math.max(8, doc.getTextWidth(shortName) + 3.5);
+        const nameWidth = doc.getTextWidth(state.name);
+        const width = badgeWidth + nameWidth + 5;
+        if (x + width > headerRightEdge && x > headerTextX) { x = headerTextX; row += 1; }
+        const item = { state, shortName, badgeWidth, x, row };
+        x += width;
+        return item;
+      });
+      const lastRow = items.at(-1)?.row || 0;
+      const lastBaseline = Math.max(headerDetailY + 6 + lastRow * 5.5, imageBottom - 1);
+      items.forEach(item => { item.y = lastBaseline - (lastRow - item.row) * 5.5; });
+      return { items, bottom: lastBaseline + 1 };
+    };
+    const legend = legendLayout();
+    const tableTop = Math.max(25, legend.bottom + 8, imageBottom + 8);
+    const drawPageHeader = (pageNumber, pageCount) => {
+      logos.forEach(logo => doc.addImage(logo.image, logo.x, logo.y, logo.width, logo.height));
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(23, 63, 52); doc.text(plot.title || 'Mic Plot', headerTextX, headerTitleY);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text(`${pdfOptions.format.toUpperCase()} ${pdfOptions.dataLayout === 'cast' ? 'CAST ' : ''}MIC PLOT · ${pageNumber} of ${pageCount}`, headerTextX, headerDetailY);
+      legend.items.forEach(({ state, shortName, badgeWidth, x, y }) => {
+        const [r, g, b] = hexToRgb(state.color);
+        doc.setFillColor(r, g, b); doc.setDrawColor(190, 202, 196); doc.roundedRect(x, y - 3.4, badgeWidth, 4.4, .6, .6, 'FD');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6); doc.setTextColor(...hexToRgb(contrastText(state.color))); doc.text(shortName, x + badgeWidth / 2, y - .5, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(90, 108, 99); doc.text(state.name, x + badgeWidth + 1.5, y - .5);
+      });
+    };
 
     autoTable(doc, {
       head,
       body,
-      startY: 25,
-      margin: { top: 25, right: 10, bottom: 12, left: 10 },
+      startY: tableTop,
+      margin: { top: tableTop, right: 10, bottom: 12, left: 10 },
       theme: 'grid',
       styles: { font: 'helvetica', fontSize: pdfOptions.fontSize, cellPadding: 1.5, lineColor: [207, 217, 211], lineWidth: 0.2, textColor: [42, 62, 55], valign: 'middle' },
-      headStyles: { fillColor: [237, 242, 239], textColor: [42, 62, 55], fontStyle: 'bold', fontSize: 5.5, minCellHeight: 18, halign: 'center', valign: 'bottom' },
-      columnStyles: { 0: { cellWidth: 8, halign: 'center' }, 1: { cellWidth: 42 }, 2: { cellWidth: 36 } },
+      headStyles: { fillColor: [237, 242, 239], textColor: [42, 62, 55], fontStyle: 'bold', fontSize: 5.5, minCellHeight: verticalHeaderHeight, halign: 'center', valign: 'bottom' },
+      columnStyles,
+      showHead: 'everyPage',
       horizontalPageBreak: true,
-      horizontalPageBreakRepeat: [0, 1, 2],
+      horizontalPageBreakRepeat: identityHeaders.map((_, index) => index),
       horizontalPageBreakBehaviour: 'immediately',
       didParseCell: data => {
-        if (data.section === 'head' && data.column.index >= 3) {
+        if (data.section === 'body' && continuationCells.has(`${data.row.index}:${data.column.index}`)) {
           data.cell.text = [];
-          data.cell.styles.cellWidth = 11;
-          data.cell.styles.minCellHeight = 34;
+          data.cell.styles.halign = 'center';
           return;
         }
-        if (data.section !== 'body' || data.column.index < 3) return;
+        if (data.section === 'head' && (data.column.index >= sceneColumnStart || verticalHeaderIndices.has(data.column.index))) {
+          data.cell.text = [];
+          data.cell.styles.minCellHeight = verticalHeaderHeight;
+          return;
+        }
+        if (data.section !== 'body' || data.column.index < sceneColumnStart) return;
         data.cell.styles.halign = 'center';
         data.cell.styles.fontStyle = 'bold';
-        data.cell.styles.cellWidth = 11;
         const state = plot.states.find(item => item.abbreviation === data.cell.raw && item.id !== 'off');
         if (state) { data.cell.styles.fillColor = hexToRgb(state.color); data.cell.styles.textColor = contrastText(state.color) === '#ffffff' ? [255, 255, 255] : [32, 48, 43]; }
       },
       didDrawCell: data => {
-        if (data.section !== 'head' || data.column.index < 3) return;
+        if (data.section === 'body' && continuationCells.has(`${data.row.index}:${data.column.index}`)) {
+          const x = data.cell.x + data.cell.width / 2;
+          const y = data.cell.y + data.cell.height / 2;
+          doc.setDrawColor(145, 145, 145);
+          doc.setLineWidth(0.25);
+          doc.line(x - 1.5, y - 1.2, x - 1.5, y + 0.7);
+          doc.line(x - 1.5, y + 0.7, x + 1.25, y + 0.7);
+          doc.line(x + 1.25, y + 0.7, x + 0.35, y - 0.1);
+          doc.line(x + 1.25, y + 0.7, x + 0.35, y + 1.5);
+          return;
+        }
+        if (data.section !== 'head' || (data.column.index < sceneColumnStart && !verticalHeaderIndices.has(data.column.index))) return;
         const name = String(data.cell.raw || '');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(5.5);
         doc.setTextColor(42, 62, 55);
         doc.text(name, data.cell.x + data.cell.width / 2 + 1.4, data.cell.y + data.cell.height - 2.5, { angle: 90 });
       },
-      didDrawPage: () => {
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(23, 63, 52); doc.text(plot.title || 'Mic Plot', 10, 12);
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text('A3 MIC PLOT', 10, 18);
-        if (pdfOptions.includeLegend) { doc.setFontSize(7); doc.text(plot.states.map(state => `${state.abbreviation || 'OFF'} · ${state.name}`).join('   '), 10, 18); }
-      }
+      didDrawPage: () => {}
     });
+    const pageCount = doc.getNumberOfPages();
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      doc.setPage(pageNumber);
+      drawPageHeader(pageNumber, pageCount);
+    }
+    return doc;
+  };
 
-    doc.save(`${cleanFilename(plot.title)}.pdf`);
+  const exportPdf = async () => {
+    try {
+      const doc = await buildPdf();
+      doc.save(`${cleanFilename(plot.title)}.pdf`);
     } catch { setSaveMessage('PDF export failed'); }
   };
 
@@ -568,6 +787,30 @@ function App() {
     } catch { setSaveMessage('PDF export failed'); }
   };
 
+  useEffect(() => {
+    if (!pdfPreviewOpen) {
+      setPdfPreviewUrl(current => { if (current) URL.revokeObjectURL(current); return ''; });
+      return;
+    }
+    let cancelled = false;
+    setPdfPreviewLoading(true);
+    setPdfPreviewError('');
+    const timer = setTimeout(async () => {
+      try {
+        const doc = await buildPdf();
+        const url = URL.createObjectURL(doc.output('blob'));
+        if (cancelled) { URL.revokeObjectURL(url); return; }
+        setPdfPreviewPages(doc.getNumberOfPages());
+        setPdfPreviewUrl(current => { if (current) URL.revokeObjectURL(current); return url; });
+      } catch {
+        if (!cancelled) setPdfPreviewError('The PDF preview could not be generated.');
+      } finally {
+        if (!cancelled) setPdfPreviewLoading(false);
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [pdfPreviewOpen, pdfOptions, plot, selectedSceneIds]);
+
   const selectedCharacter = plot.characters.find(character => character.id === selectedCharacterId);
   const selectedScene = plot.scenes.find(scene => scene.id === selectedSceneId);
   const selectedCastCharacters = plot.characters.filter(character => (character.actor || '').trim().toLocaleLowerCase() === selectedCastName.trim().toLocaleLowerCase());
@@ -600,23 +843,21 @@ function App() {
           </>}
         </div>
         <div className="button-group">
-          <span className={`save-state ${saved ? '' : 'saving'}`} aria-live="polite"><Check size={14}/> {saved ? saveMessage : saveMessage.startsWith('Local save failed') ? saveMessage : 'Saving…'}</span>
-          <button className="icon-action" onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)"><Undo2 size={16}/></button>
-          <button className="icon-action" onClick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)"><Redo2 size={16}/></button>
+          <span className={`save-state ${saved ? 'saved' : saveMessage.startsWith('Local save failed') ? 'failed' : 'saving'}`} aria-live="polite"><Check size={14}/> {saved ? saveMessage : saveMessage.startsWith('Local save failed') ? saveMessage : 'Unsaved · saving…'}</span>
+          <button className="icon-action" onClick={undo} disabled={!canUndo} aria-label={canUndo ? `Undo ${undoLabel}` : 'Nothing to undo'} title={canUndo ? `Undo ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}><Undo2 size={16}/></button>
+          <button className="icon-action" onClick={redo} disabled={!canRedo} aria-label={canRedo ? `Redo ${redoLabel}` : 'Nothing to redo'} title={canRedo ? `Redo ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}><Redo2 size={16}/></button>
           <button className="secondary" data-tooltip={reportOpen ? 'Return to the editable microphone plot' : 'View assignments grouped by cast member'} onClick={() => setReportOpen(value => !value)}><Users size={16}/> {reportOpen ? 'Plot view' : 'Cast view'}</button>
-          {reportOpen && <button className="secondary" data-tooltip="Export the current cast view and collation setting as A3 PDF" onClick={exportCastPdf}><Download size={16}/> Export cast PDF</button>}
           <button className="secondary" data-tooltip="Open, download, export, or start a new show" onClick={() => setStartupStep('manage')}><Download size={16}/> Save / Load</button>
-          <button className="icon-help" data-tooltip="Open the Mic Plot user guide" onClick={() => setHelpOpen(true)} aria-label="Help"><CircleHelp size={18}/></button>
           <button className="secondary" onClick={() => { setSetupTab('show'); setStartupStep('setup'); }}><Settings size={16}/> Show setup</button>
+          <button className="icon-help" data-tooltip="Open the Mic Plot user guide" onClick={() => setHelpOpen(true)} aria-label="Help"><CircleHelp size={18}/></button>
         </div>
       </section>
 
-      {!reportOpen && <section className="advanced-bar">
-        <div className="edit-mode-toggle" role="group" aria-label="Edit mode"><button className={editMode === 'direct' ? 'active' : ''} onClick={() => { setEditMode('direct'); setSelectedCells([]); }}>Direct Edit</button><button className={editMode === 'mass' ? 'active' : ''} onClick={() => setEditMode('mass')}>Mass Edit</button></div>
-        <div className="selection-tools"><button className="clear-selection" title="Clear selected cells and scenes" disabled={!selectedCells.length && !selectedSceneIds.length} onClick={() => { setSelectedCells([]); setSelectedSceneIds([]); }}>Clear selection</button><div className="cell-actions" aria-label="Selected cell tools"><span>{selectedCells.length ? `${selectedCells.length} cells` : 'No cells'}</span>{plot.states.map(state => <button key={state.id} disabled={!selectedCells.length} style={{ background: state.color, color: contrastText(state.color) }} onClick={() => applyStateToSelection(state.id)}>{state.abbreviation || 'OFF'}</button>)}</div></div>
+      {!reportOpen && <section className={`advanced-bar mode-${editMode}`}>
+        <div className="edit-mode-toggle" role="group" aria-label="Edit mode"><button className={editMode === 'direct' ? 'active' : ''} title="Direct Edit (D)" onClick={() => { setEditMode('direct'); setSelectedCells([]); }}>Direct Edit <kbd>D</kbd></button><button className={editMode === 'mass' ? 'active' : ''} title="Mass Edit (M)" onClick={() => { setEditMode('mass'); setCellAnchor(null); }}>Mass Edit <kbd>M</kbd></button></div>
+        <div className="selection-tools"><button className="clear-selection" title="Clear selected cells and scenes (Esc)" disabled={!selectedCells.length && !selectedSceneIds.length && !(editMode === 'direct' && cellAnchor)} onClick={() => { setSelectedCells([]); setSelectedSceneIds([]); setCellAnchor(null); }}>Clear selection</button><div className="selection-summary" aria-live="polite"><strong>{selectedSceneIds.length}</strong> scene{selectedSceneIds.length === 1 ? '' : 's'}{editMode === 'mass' && <> · <strong>{selectedCells.length}</strong> cell{selectedCells.length === 1 ? '' : 's'}</>}</div>{editMode === 'mass' && <div className="cell-actions" aria-label="Selected cell tools">{plot.states.map((state, index) => <button key={state.id} disabled={!selectedCells.length} title={`Apply ${state.name} (${index})`} style={{ background: state.color, color: contrastText(state.color) }} onClick={() => applyStateToSelection(state.id)}>{state.abbreviation || 'OFF'}<kbd>{index}</kbd></button>)}</div>}</div>
         <span className="bar-divider"></span>
-        <button className="bulk-add-button" data-tooltip="Open the keyboard-first bulk character entry drawer" onClick={() => { setDrawer('bulk'); setSelectedCharacterId(null); requestAnimationFrame(() => bulkNameRef.current?.focus()); }}><Plus size={15}/> Add characters</button>
-        <div className="group-actions"><span>GROUPS</span>{groupSuggestions.length ? groupSuggestions.map(group => <button key={group} title={editMode === 'mass' ? 'Group actions are available in Direct Edit' : selectedSceneIds.length ? `Cycle ${group} through the configured states in selected scenes` : 'Select one or more scenes first'} disabled={editMode === 'mass' || !selectedSceneIds.length} onClick={() => toggleGroupForScenes(group)}>{group}</button>) : <em>Add default groups to characters to see them here.</em>}</div>
+        <div className="group-actions"><span>GROUPS</span>{groupSuggestions.length ? groupSuggestions.map(group => <button key={group} title={!selectedSceneIds.length ? 'Select one or more scenes first' : editMode === 'mass' ? `Toggle ${group} cells in the selected scenes` : `Cycle ${group} through the configured states in selected scenes`} disabled={!selectedSceneIds.length} onClick={() => editMode === 'mass' ? toggleGroupSelection(group) : toggleGroupForScenes(group)}>{group}</button>) : <em>Add default groups to characters to see them here.</em>}</div>
       </section>}
 
       {!reportOpen && <section className="grid-shell">
@@ -625,7 +866,8 @@ function App() {
             <thead><tr>
               <th className="num-col">#</th><th className="character-col">CHARACTER</th><th className="actor-col">CAST MEMBER</th>
               {plot.scenes.map((s, i) => <th className={`scene-col ${selectedSceneIds.includes(s.id) ? 'scene-selected' : ''}`} key={s.id} draggable onDragStart={e => e.dataTransfer.setData('application/x-scene', s.id)} onDragOver={e => e.preventDefault()} onDrop={e => { const id = e.dataTransfer.getData('application/x-scene'); if (id) moveScene(id, s.id); }}>
-                <button className="scene-heading" aria-pressed={selectedSceneIds.includes(s.id)} aria-label={`${s.name}. Open scene properties.${i > 0 ? ' Use Alt and arrow keys to reorder.' : ''}`} onClick={e => inspectScene(s.id, e.shiftKey)} onKeyDown={e => { if (e.altKey && e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveScene(s.id, plot.scenes[i - 1].id); } if (e.altKey && e.key === 'ArrowRight' && i < plot.scenes.length - 1) { e.preventDefault(); moveScene(s.id, plot.scenes[i + 1].id); } }}>{s.name}</button>
+                <button className="scene-edit" title={`Edit ${s.name}`} aria-label={`Edit ${s.name}`} onClick={e => { e.stopPropagation(); inspectScene(s.id); }}><Pencil size={11}/></button>
+                <button className="scene-heading" aria-pressed={selectedSceneIds.includes(s.id)} aria-label={`${s.name}. Toggle scene selection.${i > 0 ? ' Use Alt and arrow keys to reorder.' : ''}`} onClick={() => selectSceneHeading(s.id)} onKeyDown={e => { if (e.altKey && e.key === 'ArrowLeft' && i > 0) { e.preventDefault(); moveScene(s.id, plot.scenes[i - 1].id); } if (e.altKey && e.key === 'ArrowRight' && i < plot.scenes.length - 1) { e.preventDefault(); moveScene(s.id, plot.scenes[i + 1].id); } }}>{s.name}</button>
               </th>)}
               <th className="add-col"><button title="Add scene" onClick={addScene}><Plus/></button></th>
             </tr></thead>
@@ -634,13 +876,13 @@ function App() {
               <td className="character-col"><button className="row-value" onClick={() => { setSelectedCharacterId(c.id); setDrawer('character'); }}>{c.name}</button></td>
               <td className={`actor-col actor-cell ${castMenu?.id === c.id ? 'menu-open' : ''}`}><button className="row-value cast-value" onClick={() => { setSelectedCastName(c.actor || ''); setSelectedCharacterId(null); setDrawer('cast'); }}>{c.actor || 'Uncast'}</button>
               </td>
-              {plot.scenes.map(s => { const key = `${c.id}:${s.id}`; const raw = plot.cells[key]; const st = stateById[raw] ? raw : 'off'; const state = stateById[st]; return <td className={`plot-cell ${selectedCells.includes(key) ? 'cell-selected' : ''}`} key={s.id}><button title={`${c.name} · ${s.name}: ${state.name}. ${editMode === 'mass' ? selectedCells.includes(key) ? 'Click to remove from selection.' : 'Click or drag to add to selection.' : 'Click to cycle.'}`} aria-label={`${c.name}, ${s.name}: ${state.name}`} className={`state ${st}`} style={st === 'off' ? undefined : { background: state.color, color: contrastText(state.color) }} onPointerDown={e => { if (editMode === 'mass') { e.preventDefault(); massDraggingRef.current = true; selectMassCell(key); return; } setCellAnchor(key); const next = cycleState(plot.states, st); setPaintState(next); setCellState(key, next); }} onPointerEnter={e => { if (editMode === 'mass' && massDraggingRef.current && e.buttons === 1) addMassCell(key); else if (editMode === 'direct' && paintState && e.buttons === 1) setCellState(key, paintState); }} onPointerUp={() => { setPaintState(null); massDraggingRef.current = false; }}>{state.abbreviation}</button></td> })}
+              {plot.scenes.map(s => { const key = `${c.id}:${s.id}`; const raw = plot.cells[key]; const st = stateById[raw] ? raw : 'off'; const state = stateById[st]; return <td className={`plot-cell ${selectedCells.includes(key) ? 'cell-selected' : ''} ${editMode === 'direct' && cellAnchor === key ? 'cell-focused' : ''}`} key={s.id}><button data-cell-key={key} title={`${c.name} · ${s.name}: ${state.name}. ${editMode === 'mass' ? selectedCells.includes(key) ? 'Click to remove from selection.' : 'Click or drag to add to selection.' : 'Click to cycle, then use arrow and number keys.'}`} aria-label={`${c.name}, ${s.name}: ${state.name}`} className={`state ${st}`} style={st === 'off' ? undefined : { background: state.color, color: contrastText(state.color) }} onPointerDown={e => { if (editMode === 'mass') { e.preventDefault(); massDraggingRef.current = true; selectMassCell(key); return; } setCellAnchor(key); const next = cycleState(plot.states, st); setPaintState(next); setCellState(key, next); }} onPointerEnter={e => { if (editMode === 'mass' && massDraggingRef.current && e.buttons === 1) addMassCell(key); else if (editMode === 'direct' && paintState && e.buttons === 1) setCellState(key, paintState); }} onPointerUp={() => { setPaintState(null); massDraggingRef.current = false; }}>{state.abbreviation}</button></td> })}
               <td className="add-col"></td>
             </tr>)}
               <tr className="add-character-row"><td colSpan={plot.scenes.length + 4}><button onClick={addCharacter}><Plus size={14}/> Add character</button></td></tr>
             </tbody>
           </table>
-          {!visible.length && <div className="empty">{plot.characters.length ? <>No characters match “{query}”.</> : <>No characters yet. Add them in Show Setup or from the toolbar.</>}</div>}
+          {!visible.length && <div className="empty">{plot.characters.length ? <>No characters match “{query}”.</> : <>No characters yet. Add them in Show Setup.</>}</div>}
         </div>
       </section>}
       {reportOpen && <section className="cast-workspace">
@@ -666,9 +908,9 @@ function App() {
         </div>
         <button className="primary drawer-add" disabled={!bulkDraft.name.trim()} onClick={() => addBulkCharacter()}><Plus size={15}/> Add character</button>
       </> : drawer === 'scene' && selectedScene ? <>
-        <p>Changes are saved immediately. Shift-click another scene heading to keep multiple scenes selected.</p>
+        <p>Changes are saved immediately. Scene selection remains independent from this inspector.</p>
         <div className="drawer-fields"><label>Scene name<input value={selectedScene.name} onChange={e => updateScene(selectedScene.id, e.target.value)}/></label></div>
-        <div className="drawer-row"><button className="secondary" onClick={() => duplicateScene(selectedScene.id)}>Duplicate</button><button className="drawer-delete" onClick={() => { if (confirm(`Delete “${selectedScene.name}”?`)) { removeScene(selectedScene.id); setSelectedSceneIds(ids => ids.filter(id => id !== selectedScene.id)); setSelectedSceneId(null); setDrawer(null); } }}><Trash2 size={14}/> Delete scene</button></div>
+        <div className="drawer-row"><button className="secondary" onClick={() => duplicateScene(selectedScene.id)}>Duplicate</button><button className="drawer-delete" onClick={() => { if (confirmRemoveScene(selectedScene)) { removeScene(selectedScene.id); setSelectedSceneIds(ids => ids.filter(id => id !== selectedScene.id)); setSelectedSceneId(null); setDrawer(null); } }}><Trash2 size={14}/> Delete scene</button></div>
       </> : drawer === 'cast' ? <>
         <p>Edit this cast name for every linked character, or choose a role to open its character details.</p>
         <div className="drawer-fields"><label>Cast name<SmartField value={selectedCastName} onChange={renameSelectedCast} suggestions={castSuggestions.filter(name => name.toLocaleLowerCase() !== selectedCastName.toLocaleLowerCase())} placeholder="Uncast"/></label></div>
@@ -680,27 +922,47 @@ function App() {
           <label>Cast name<SmartField value={selectedCharacter.actor} onChange={value => updateCharacter(selectedCharacter.id, 'actor', value)} suggestions={castSuggestions.filter(name => name !== selectedCharacter.actor)} /></label>
           <label>Default group<SmartField value={selectedCharacter.defaultGroup || ''} onChange={value => updateCharacter(selectedCharacter.id, 'defaultGroup', value)} suggestions={groupSuggestions.filter(group => group !== selectedCharacter.defaultGroup)} onAdvance={() => document.activeElement?.blur()} /></label>
         </div>
-        <div className="drawer-row"><button className="secondary" onClick={() => duplicateCharacter(selectedCharacter.id)}>Duplicate</button><button className="drawer-delete" onClick={() => { if (confirm(`Delete ${selectedCharacter.name}?`)) { removeCharacter(selectedCharacter.id); setSelectedCharacterId(null); setDrawer(null); } }}><Trash2 size={14}/> Delete character</button></div>
+        <div className="drawer-row"><button className="secondary" onClick={() => duplicateCharacter(selectedCharacter.id)}>Duplicate</button><button className="drawer-delete" onClick={() => { if (confirmRemoveCharacter(selectedCharacter)) { removeCharacter(selectedCharacter.id); setSelectedCharacterId(null); setDrawer(null); } }}><Trash2 size={14}/> Delete character</button></div>
       </> : null}
     </aside>}
     {helpOpen && <div className="help-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setHelpOpen(false); }}>
       <section className="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
         <div className="help-heading"><div><span>MIC PLOT GUIDE</span><h2 id="help-title">How to use the app</h2></div><button onClick={() => setHelpOpen(false)} aria-label="Close help"><X size={18}/></button></div>
         <div className="help-grid">
-          <article><strong>1</strong><div><h3>Build the plot</h3><p>Use Show Setup to manage production details, characters, scenes, and cell states. Click a plot cell to cycle through the configured states.</p></div></article>
-          <article><strong>2</strong><div><h3>Custom states</h3><p>Every show starts with Off and On. Add named states and choose from 15 coordinated colours in the Show tab.</p></div></article>
-          <article><strong>3</strong><div><h3>Work quickly</h3><p>Drag row numbers or scene headings to reorder. Click a scene heading for its inspector. Escape clears selections and closes an open inspector.</p></div></article>
-          <article><strong>4</strong><div><h3>Edit modes</h3><p>Direct Edit cycles cells immediately. In Mass Edit, click or drag to toggle and collect cells; a state button then applies the change.</p></div></article>
-          <article><strong>5</strong><div><h3>Groups and scenes</h3><p>Give characters a Default Group, select one or more scene headings, then use a group button in Direct Edit to cycle those cells.</p></div></article>
-          <article><strong>6</strong><div><h3>Cast View</h3><p>View the plot grouped by performer. Collated roles prefer On, then the first matching custom state.</p></div></article>
-          <article><strong>7</strong><div><h3>Save and export</h3><p>Shows and recovery snapshots save on this device. Download a <b>.micplot</b> backup, export CSV, or configure PDF and print output.</p></div></article>
+          <article><strong>1</strong><div><h3>Create the show</h3><p>Enter the company and show name. Show Setup opens automatically with empty character and scene lists.</p></div></article>
+          <article><strong>2</strong><div><h3>Configure it</h3><p>Choose states and colours, upload logos, add or paste characters, and add scenes. Drag each list into the required order.</p></div></article>
+          <article><strong>3</strong><div><h3>Build assignments</h3><p>In Direct Edit, click a cell to cycle it. Move the active cell with arrow keys and assign its numbered state with a number key.</p></div></article>
+          <article><strong>4</strong><div><h3>Edit many cells</h3><p>Press M for Mass Edit, then click or drag to select cells. Select scenes before using a group button, then apply a state.</p></div></article>
+          <article><strong>5</strong><div><h3>Review the cast</h3><p>Open Cast View to group assignments by performer. Turn on role collation when one combined row per performer is useful.</p></div></article>
+          <article><strong>6</strong><div><h3>Save and transfer</h3><p>Changes autosave locally. Open Save / Load to switch shows, restore snapshots, or download and open .micplot backups.</p></div></article>
+          <article><strong>7</strong><div><h3>Export the result</h3><p>Choose Export PDF, adjust the full-document preview, then download it. CSV and browser print are also available.</p></div></article>
         </div>
         <div className="help-support"><h3>Documentation and support</h3><p>Read the complete guide or report issues and feature requests through the public GitHub repository.</p><a href="https://github.com/staljabro/Mic-Plot-Generator/tree/main/docs" target="_blank" rel="noopener noreferrer">Open documentation on GitHub ↗</a></div>
         <div className="help-footer"><span><b>Mic Plot Studio v{APP_VERSION}</b> · Created by Joshua Braithwaite<br/>Tip: hover over controls for a quick explanation.</span><button className="primary" onClick={() => setHelpOpen(false)}>Got it</button></div>
       </section>
     </div>}
+    {pdfPreviewOpen && <div className="pdf-preview-backdrop">
+      <section className="pdf-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="pdf-preview-title">
+        <header className="pdf-preview-header"><div><span>EXPORT PDF</span><h2 id="pdf-preview-title">Preview all pages</h2><p>This is the exact PDF that will be downloaded.</p></div><div className="pdf-preview-actions"><a className={`primary ${!pdfPreviewUrl ? 'disabled' : ''}`} href={pdfPreviewUrl || undefined} download={`${cleanFilename(plot.title)}.pdf`} aria-disabled={!pdfPreviewUrl}><Download size={15}/> Download PDF</a><button className="setup-close" onClick={() => setPdfPreviewOpen(false)} aria-label="Close PDF preview"><X size={18}/></button></div></header>
+        <div className="pdf-preview-toolbar">
+          <label>Data layout<select value={pdfOptions.dataLayout} onChange={e => setPdfOptions({ ...pdfOptions, dataLayout: e.target.value })}><option value="character">Character</option><option value="cast">Cast</option></select></label>
+          <label>Paper<select value={pdfOptions.format} onChange={e => setPdfOptions({ ...pdfOptions, format: e.target.value })}><option value="a4">A4</option><option value="a3">A3</option></select></label>
+          <label>Page layout<select value={pdfOptions.orientation} onChange={e => setPdfOptions({ ...pdfOptions, orientation: e.target.value })}><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+          <label>Text size<input type="number" min="5" max="10" step="0.5" value={pdfOptions.fontSize} onChange={e => setPdfOptions({ ...pdfOptions, fontSize: Number(e.target.value) })}/></label>
+          <label>Scale<select value={pdfPreviewScale} onChange={e => setPdfPreviewScale(e.target.value)}><option value="page-fit">Fit page</option><option value="page-width">Fit width</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option></select></label>
+          <label>Logo 1<select disabled={!plot.showLogo} value={plot.showLogo ? pdfOptions.logoPosition : 'off'} onChange={e => { const position = e.target.value; setPdfOptions(options => ({ ...options, logoPosition: position, logo2Position: position !== 'off' && options.logo2Position === position ? 'off' : options.logo2Position })); }}><option value="off">Off</option><option value="left">Left</option><option value="right">Right</option></select></label>
+          <label>Logo 2<select disabled={!plot.showLogo2} value={plot.showLogo2 ? pdfOptions.logo2Position : 'off'} onChange={e => { const position = e.target.value; setPdfOptions(options => ({ ...options, logo2Position: position, logoPosition: position !== 'off' && options.logoPosition === position ? 'off' : options.logoPosition })); }}><option value="off">Off</option><option value="left">Left</option><option value="right">Right</option></select></label>
+          {pdfOptions.dataLayout === 'cast' && <label className="preview-check"><input type="checkbox" checked={pdfOptions.showCharacterNumber} onChange={e => setPdfOptions({ ...pdfOptions, showCharacterNumber: e.target.checked })}/> Character #</label>}
+          {pdfOptions.dataLayout === 'cast' && <label className="preview-check"><input type="checkbox" checked={pdfOptions.showMicNumber} onChange={e => setPdfOptions({ ...pdfOptions, showMicNumber: e.target.checked })}/> Mic #</label>}
+          <label className="preview-check"><input type="checkbox" checked={pdfOptions.includeLegend} onChange={e => setPdfOptions({ ...pdfOptions, includeLegend: e.target.checked })}/> Include legend</label>
+          <label className="preview-check"><input type="checkbox" disabled={!selectedSceneIds.length} checked={pdfOptions.selectedOnly} onChange={e => setPdfOptions({ ...pdfOptions, selectedOnly: e.target.checked })}/> Selected scenes only</label>
+          <span className="preview-status" aria-live="polite">{pdfPreviewLoading ? 'Updating preview…' : pdfPreviewError || `${pdfPreviewPages} page${pdfPreviewPages === 1 ? '' : 's'}`}</span>
+        </div>
+        <div className="pdf-viewer-shell">{pdfPreviewUrl && !pdfPreviewError ? <iframe key={`${pdfPreviewUrl}-${pdfPreviewScale}`} title="Generated PDF preview" src={`${pdfPreviewUrl}#page=1&zoom=${pdfPreviewScale}`}></iframe> : <div className="pdf-viewer-message">{pdfPreviewError || 'Generating complete PDF preview…'}</div>}</div>
+      </section>
+    </div>}
     {startupStep && <div className="modal-backdrop">
-      <section className={`startup-modal ${startupStep === 'setup' ? 'setup-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="startup-title">
+      <section className={`startup-modal ${startupStep === 'setup' ? 'setup-modal' : startupStep === 'manage' ? 'manage-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="startup-title">
         {startupStep === 'choose' && <>
           <div className="modal-kicker">MIC PLOT</div>
           <h2 id="startup-title">Welcome</h2>
@@ -728,10 +990,15 @@ function App() {
           <button className="text-button" onClick={() => setStartupStep(plot.id ? 'manage' : 'choose')}>Back</button>
         </>}
         {startupStep === 'setup' && <>
-          <div className="setup-heading"><div><div className="modal-kicker">SHOW SETUP</div><h2 id="startup-title">Configure production</h2></div><button className="setup-close" onClick={() => setStartupStep(null)} aria-label="Close show setup"><X size={18}/></button></div>
+          <div className="setup-heading"><div><div className="modal-kicker">SHOW SETUP</div><h2 id="startup-title">Configure production</h2><div className="setup-checklist">{setupChecks.map(item => <button key={item.tab} className={item.done ? 'done' : ''} onClick={() => setSetupTab(item.tab)}><Check size={12}/>{item.label}</button>)}</div></div><button className="setup-close" onClick={() => setStartupStep(null)} aria-label="Close show setup"><X size={18}/></button></div>
           <div className="setup-tabs" role="tablist">{['show','characters','scenes'].map(tab => <button key={tab} role="tab" aria-selected={setupTab === tab} onClick={() => setSetupTab(tab)}>{tab}</button>)}</div>
           {setupTab === 'show' && <div className="setup-pane">
             <div className="setup-fields"><label>School or company<input value={plot.company} onChange={e => updateShowIdentity('company', e.target.value)}/></label><label>Show name<input value={plot.showName} onChange={e => updateShowIdentity('showName', e.target.value)}/></label></div>
+            <div className="show-logo-settings">
+              <div className="show-logo-setting"><div className="show-logo-preview">{plot.showLogo ? <img src={plot.showLogo} alt="Show logo 1"/> : <span>No image</span>}</div><div><strong>Show logo 1</strong><p>Stored with the show and available on either side of the PDF header.</p><input ref={showLogoInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => uploadShowLogo(e.target.files?.[0], 'showLogo')}/><div className="show-logo-actions"><button className="secondary" onClick={() => showLogoInputRef.current?.click()}>{plot.showLogo ? 'Replace image' : 'Upload image'}</button>{plot.showLogo && <button className="text-button" onClick={() => { setPlot(p => ({ ...p, showLogo: '' })); setPdfOptions(options => ({ ...options, logoPosition: 'off' })); }}>Remove</button>}</div></div></div>
+              <div className="show-logo-setting"><div className="show-logo-preview">{plot.showLogo2 ? <img src={plot.showLogo2} alt="Show logo 2"/> : <span>No image</span>}</div><div><strong>Show logo 2</strong><p>When both logos are shown, they are kept on opposite sides.</p><input ref={showLogo2InputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => uploadShowLogo(e.target.files?.[0], 'showLogo2')}/><div className="show-logo-actions"><button className="secondary" onClick={() => showLogo2InputRef.current?.click()}>{plot.showLogo2 ? 'Replace image' : 'Upload image'}</button>{plot.showLogo2 && <button className="text-button" onClick={() => { setPlot(p => ({ ...p, showLogo2: '' })); setPdfOptions(options => ({ ...options, logo2Position: 'off' })); }}>Remove</button>}</div></div></div>
+            </div>
+            {templateShows.length > 0 && <div className="template-row"><div><strong>Reuse state set</strong><span>Copy state names, colours, order, and shortcuts from another show.</span></div><select value={stateTemplateId} onChange={e => setStateTemplateId(e.target.value)}><option value="">Choose a show…</option>{templateShows.map(item => <option key={item.plot.id} value={item.plot.id}>{item.plot.title}</option>)}</select><button className="secondary" disabled={!stateTemplateId} onClick={copyStateTemplate}>Copy states</button></div>}
             <div className="setup-section-title"><div><strong>Cell states</strong><span>Drag to set their toolbar, cycle, and hotkey order.</span></div></div>
             <div className="state-editor">{plot.states.map((state, index) => <div className="state-editor-row" key={state.id} onDragOver={e => e.preventDefault()} onDrop={() => { if (setupDragging?.type === 'state') moveState(setupDragging.id, state.id); setSetupDragging(null); }}>
               <button type="button" className="state-drag" draggable onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', state.id); setSetupDragging({ type: 'state', id: state.id }); }} onDragEnd={() => setSetupDragging(null)} aria-label={`Drag ${state.name} to reorder`}><GripVertical size={15}/></button>
@@ -739,48 +1006,38 @@ function App() {
               <input value={state.name} disabled={state.locked} aria-label="State name" onChange={e => updateState(state.id, 'name', e.target.value.slice(0, 40))}/>
               <input value={state.abbreviation} disabled={state.locked} aria-label="State abbreviation" maxLength="6" onChange={e => updateState(state.id, 'abbreviation', e.target.value.toUpperCase())}/>
               {state.id === 'off' ? <span className="locked-state">Fixed</span> : <div className="color-picker"><button type="button" className="color-swatch" aria-label={`Choose colour for ${state.name}`} style={{ background: state.color }} onClick={() => setColorPickerId(current => current === state.id ? null : state.id)}></button>{colorPickerId === state.id && <div className="color-popover">{STATE_COLORS.map(color => <button type="button" key={color} aria-label={color} className={color === state.color ? 'chosen' : ''} style={{ background: color }} onClick={() => { updateState(state.id, 'color', color); setColorPickerId(null); }}></button>)}</div>}</div>}
-              {state.locked ? <span className="locked-state">Required</span> : <button className="setup-delete" aria-label={`Remove ${state.name}`} onClick={() => { if (confirm(`Remove “${state.name}” and set its cells to Off?`)) removeState(state.id); }}><Trash2 size={14}/></button>}
+              {state.locked ? <span className="locked-state">Required</span> : <button className="setup-delete" aria-label={`Remove ${state.name}`} onClick={() => { if (confirmRemoveState(state)) removeState(state.id); }}><Trash2 size={14}/></button>}
             </div>)}</div>
             <div className="state-add-row"><input value={stateDraft.name} onChange={e => setStateDraft({ ...stateDraft, name: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addState(); } }} placeholder="State name"/><input value={stateDraft.abbreviation} maxLength="6" onChange={e => setStateDraft({ ...stateDraft, abbreviation: e.target.value.toUpperCase() })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addState(); } }} placeholder="Short name"/><div className="color-picker"><button type="button" className="color-swatch" aria-label="Choose new state colour" style={{ background: stateDraft.color }} onClick={() => setColorPickerId(current => current === 'new' ? null : 'new')}></button>{colorPickerId === 'new' && <div className="color-popover">{STATE_COLORS.map(color => <button type="button" key={color} aria-label={color} className={color === stateDraft.color ? 'chosen' : ''} style={{ background: color }} onClick={() => { setStateDraft({ ...stateDraft, color }); setColorPickerId(null); }}></button>)}</div>}</div><button className="primary" disabled={!stateDraft.name.trim() || !stateDraft.abbreviation.trim()} onClick={addState}><Plus size={14}/> Add state</button></div>
           </div>}
           {setupTab === 'characters' && <div className="setup-pane">
             <div className="setup-section-title"><div><strong>Characters</strong><span>Edit fields directly or drag rows to rearrange the main plot.</span></div></div>
+            {templateShows.length > 0 && <div className="template-row"><div><strong>Reuse character groups</strong><span>Add group choices from another show without copying its characters.</span></div><select value={groupTemplateId} onChange={e => setGroupTemplateId(e.target.value)}><option value="">Choose a show…</option>{templateShows.map(item => <option key={item.plot.id} value={item.plot.id}>{item.plot.title}</option>)}</select><button className="secondary" disabled={!groupTemplateId} onClick={copyGroupTemplate}>Copy groups</button></div>}
             <div className="setup-add-row character"><input ref={setupCharacterNameRef} value={setupCharacter.name} onChange={e => setSetupCharacter({ ...setupCharacter, name: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSetupCharacter(); } else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); setupCharacterActorRef.current?.focus(); } }} placeholder="Character name"/><SmartField ref={setupCharacterActorRef} value={setupCharacter.actor} onChange={value => setSetupCharacter(current => ({ ...current, actor: value }))} suggestions={castSuggestions} onAdvance={() => setupCharacterGroupRef.current?.focus()} onSubmit={addSetupCharacter} placeholder="Cast member"/><SmartField ref={setupCharacterGroupRef} value={setupCharacter.defaultGroup} onChange={value => setSetupCharacter(current => ({ ...current, defaultGroup: value }))} suggestions={groupSuggestions} onAdvance={() => setupCharacterNameRef.current?.focus()} onSubmit={addSetupCharacter} placeholder="Default group"/><button className="primary" disabled={!setupCharacter.name.trim()} onClick={addSetupCharacter}><Plus size={14}/> Add</button></div>
             <div className="setup-paste"><button className="text-button" onClick={() => setSetupPasteOpen(value => !value)}>{setupPasteOpen ? 'Hide bulk paste' : 'Bulk paste characters'}</button>{setupPasteOpen && <div className="setup-paste-panel"><p>Paste tab-separated columns: Character, Cast member, and optional Group. A header row is optional.</p><textarea value={pasteText} onChange={event => setPasteText(event.target.value)} placeholder={'Character\tCast member\tGroup\nHamlet\tAlex\tLeads'} /><button className="primary" disabled={!pasteText.trim()} onClick={() => { if (importPastedCharacters(pasteText)) setPasteText(''); }}>Import characters</button></div>}</div>
-            <div className="setup-list">{plot.characters.map(character => <div className="setup-list-row character" key={character.id} draggable onDragStart={() => setSetupDragging({ type: 'character', id: character.id })} onDragOver={e => e.preventDefault()} onDrop={() => { if (setupDragging?.type === 'character') moveCharacter(setupDragging.id, character.id); setSetupDragging(null); }}><GripVertical size={15}/><input value={character.name} aria-label="Character name" onChange={e => updateCharacter(character.id, 'name', e.target.value)}/><SmartField value={character.actor} onChange={value => updateCharacter(character.id, 'actor', value)} suggestions={castSuggestions.filter(name => name !== character.actor)} placeholder="Cast member"/><SmartField value={character.defaultGroup || ''} onChange={value => updateCharacter(character.id, 'defaultGroup', value)} suggestions={groupSuggestions.filter(group => group !== character.defaultGroup)} placeholder="Default group"/><button className="setup-delete" aria-label={`Delete ${character.name}`} onClick={() => { if (confirm(`Delete ${character.name}?`)) removeCharacter(character.id); }}><Trash2 size={14}/></button></div>)}</div>
+            <div className="setup-list">{plot.characters.map(character => <div className="setup-list-row character" key={character.id} draggable onDragStart={() => setSetupDragging({ type: 'character', id: character.id })} onDragOver={e => e.preventDefault()} onDrop={() => { if (setupDragging?.type === 'character') moveCharacter(setupDragging.id, character.id); setSetupDragging(null); }}><GripVertical size={15}/><input value={character.name} aria-label="Character name" onChange={e => updateCharacter(character.id, 'name', e.target.value)}/><SmartField value={character.actor} onChange={value => updateCharacter(character.id, 'actor', value)} suggestions={castSuggestions.filter(name => name !== character.actor)} placeholder="Cast member"/><SmartField value={character.defaultGroup || ''} onChange={value => updateCharacter(character.id, 'defaultGroup', value)} suggestions={groupSuggestions.filter(group => group !== character.defaultGroup)} placeholder="Default group"/><button className="setup-delete" aria-label={`Delete ${character.name}`} onClick={() => { if (confirmRemoveCharacter(character)) removeCharacter(character.id); }}><Trash2 size={14}/></button></div>)}</div>
           </div>}
           {setupTab === 'scenes' && <div className="setup-pane">
             <div className="setup-section-title"><div><strong>Scenes</strong><span>Add scenes in bulk, edit their names, or drag to rearrange the main plot.</span></div></div>
             <form className="setup-add-row scene" onSubmit={e => { e.preventDefault(); addSetupScene(); }}><textarea value={setupSceneName} onChange={e => setSetupSceneName(e.target.value)} placeholder={'Scene names\nOne per line'}/><button className="primary" disabled={!setupSceneName.trim()}><Plus size={14}/> Add scenes</button></form>
-            <div className="setup-list">{plot.scenes.map(scene => <div className="setup-list-row scene" key={scene.id} draggable onDragStart={() => setSetupDragging({ type: 'scene', id: scene.id })} onDragOver={e => e.preventDefault()} onDrop={() => { if (setupDragging?.type === 'scene') moveScene(setupDragging.id, scene.id); setSetupDragging(null); }}><GripVertical size={15}/><input value={scene.name} aria-label="Scene name" onChange={e => updateScene(scene.id, e.target.value)}/><button className="secondary" onClick={() => duplicateScene(scene.id)}>Duplicate</button><button className="setup-delete" aria-label={`Delete ${scene.name}`} onClick={() => { if (confirm(`Delete “${scene.name}”?`)) removeScene(scene.id); }}><Trash2 size={14}/></button></div>)}</div>
+            <div className="setup-list">{plot.scenes.map(scene => <div className="setup-list-row scene" key={scene.id} draggable onDragStart={() => setSetupDragging({ type: 'scene', id: scene.id })} onDragOver={e => e.preventDefault()} onDrop={() => { if (setupDragging?.type === 'scene') moveScene(setupDragging.id, scene.id); setSetupDragging(null); }}><GripVertical size={15}/><input value={scene.name} aria-label="Scene name" onChange={e => updateScene(scene.id, e.target.value)}/><button className="secondary" onClick={() => duplicateScene(scene.id)}>Duplicate</button><button className="setup-delete" aria-label={`Delete ${scene.name}`} onClick={() => { if (confirmRemoveScene(scene)) removeScene(scene.id); }}><Trash2 size={14}/></button></div>)}</div>
           </div>}
-          <div className="setup-footer"><span>{plot.characters.length} characters · {plot.scenes.length} scenes · {plot.states.length} states</span><button className="primary" onClick={() => setStartupStep(null)}>Done</button></div>
+          <div className="setup-footer"><span><strong>{setupChecks.filter(item => item.done).length}/3 ready</strong> · {plot.characters.length} characters · {plot.scenes.length} scenes · {plot.states.length} states</span><button className="primary" onClick={() => setStartupStep(null)}>{setupChecks.every(item => item.done) ? 'Finish setup' : 'Continue later'}</button></div>
         </>}
         {startupStep === 'manage' && <>
-          <div className="modal-kicker">SHOW FILES</div>
-          <h2 id="startup-title">Save, load or export</h2>
-          <p>Your current show is automatically cached in this browser. Download a project file for backup or transfer.</p>
-          <div className="file-actions">
-            <button onClick={downloadShow}><Download size={18}/><span><strong>Download show</strong><small>Editable .micplot project</small></span></button>
-            <button onClick={() => { setLoadError(''); setStartupStep('load'); }}><Download size={18}/><span><strong>Open show</strong><small>Load a .micplot project</small></span></button>
-            <button onClick={exportCsv}><Download size={18}/><span><strong>Export CSV</strong><small>Spreadsheet format</small></span></button>
-            <button onClick={exportPdf}><Download size={18}/><span><strong>Export PDF</strong><small>{pdfOptions.format.toUpperCase()} {pdfOptions.orientation}</small></span></button>
-            <button onClick={() => window.print()}><Download size={18}/><span><strong>Print preview</strong><small>Use browser print settings</small></span></button>
+          <header className="manage-heading"><div><div className="modal-kicker">SHOW FILES</div><h2 id="startup-title">Save, load or export</h2><p>Shows save automatically to this browser. Download a project file for a portable backup.</p></div><button className="setup-close" onClick={() => { setEasterEgg(false); setStartupStep(null); }} aria-label="Close Save and Load"><X size={18}/></button></header>
+          <div className="manage-grid">
+            <div className="manage-primary">
+              <section className="manage-section current-show-card"><div className="manage-section-heading"><span>CURRENT SHOW</span><strong>{plot.title}</strong><small>{plot.characters.length} characters · {plot.scenes.length} scenes · {activeCount} active cues</small></div><div className="project-actions"><button className="primary" onClick={downloadShow}><Download size={17}/><span><strong>Download show</strong><small>Editable .micplot backup</small></span></button><button className="secondary" onClick={() => { setLoadError(''); setStartupStep('load'); }}><Download size={17}/><span><strong>Open show file</strong><small>Import from this device</small></span></button></div></section>
+              <section className="manage-section export-section"><div className="manage-section-heading"><span>EXPORT</span><strong>Create a shareable copy</strong><small>Preview the complete PDF before downloading, or export the raw table data.</small></div><div className="export-actions"><button className="primary-export" onClick={() => setPdfPreviewOpen(true)}><Download size={16}/><span><strong>Export PDF</strong><small>Preview all pages and configure</small></span></button><button onClick={exportCsv}><Download size={16}/><span><strong>Export CSV</strong><small>Spreadsheet data</small></span></button><button onClick={() => window.print()}><Download size={16}/><span><strong>Print</strong><small>Browser print dialog</small></span></button></div></section>
+            </div>
+            <section className="manage-section library-panel"><div className="library-heading"><div className="manage-section-heading"><span>ON THIS DEVICE</span><strong>Saved shows</strong><small>{storedShows.length} show{storedShows.length === 1 ? '' : 's'} available</small></div><button className="secondary" onClick={() => { setNewShow({ company: '', name: '' }); setStartupStep('new'); }}><Plus size={15}/> New show</button></div>
+              <div className="local-library">
+                {storedShows.map(item => <div className={`local-show ${item.plot.id === plot.id ? 'current' : ''}`} key={item.plot.id}><button onClick={() => { resetPlot(normalisePlot(item.plot)); setStartupStep(null); }}><strong>{item.plot.title}</strong><small>{item.plot.id === plot.id ? 'Current show · ' : ''}{new Date(item.updatedAt).toLocaleString()}</small></button><button title="Duplicate show" aria-label={`Duplicate saved ${item.plot.title}`} onClick={() => duplicateStoredShow(item)}><Plus size={13}/></button><button aria-label={`Delete saved ${item.plot.title}`} onClick={() => { if (item.plot.id === plot.id) return; if (confirm(`Delete saved show “${item.plot.title}”?`)) { deleteStoredPlot(item.plot.id); setLibraryRevision(value => value + 1); } }} disabled={item.plot.id === plot.id}><Trash2 size={13}/></button></div>)}
+                {backups.length > 0 && <details className="recovery-list"><summary>Recovery snapshots ({backups.length})</summary>{backups.map(item => <button className="backup" key={item.savedAt} onClick={() => { if (confirm(`Restore backup from ${new Date(item.savedAt).toLocaleString()}?`)) { resetPlot(normalisePlot(item.plot)); setStartupStep(null); } }}><strong>{new Date(item.savedAt).toLocaleDateString()}</strong><span>{new Date(item.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></button>)}</details>}
+              </div>
+            </section>
           </div>
-          <div className="pdf-settings">
-            <strong>PDF options</strong>
-            <label>Paper<select value={pdfOptions.format} onChange={e => setPdfOptions({ ...pdfOptions, format: e.target.value })}><option value="a4">A4</option><option value="a3">A3</option></select></label>
-            <label>Layout<select value={pdfOptions.orientation} onChange={e => setPdfOptions({ ...pdfOptions, orientation: e.target.value })}><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
-            <label>Text size<input type="number" min="5" max="10" step="0.5" value={pdfOptions.fontSize} onChange={e => setPdfOptions({ ...pdfOptions, fontSize: Number(e.target.value) })}/></label>
-            <label className="check-label"><input type="checkbox" checked={pdfOptions.includeLegend} onChange={e => setPdfOptions({ ...pdfOptions, includeLegend: e.target.checked })}/> Legend</label>
-            <label className="check-label"><input type="checkbox" disabled={!selectedSceneIds.length} checked={pdfOptions.selectedOnly} onChange={e => setPdfOptions({ ...pdfOptions, selectedOnly: e.target.checked })}/> Selected scenes only</label>
-          </div>
-          <div className="local-library">
-            <strong>Shows on this device</strong>
-            {storedShows.map(item => <div className="local-show" key={item.plot.id}><button onClick={() => { resetPlot(normalisePlot(item.plot)); setStartupStep(null); }}>{item.plot.title}<small>{new Date(item.updatedAt).toLocaleString()}</small></button><button title="Duplicate show" aria-label={`Duplicate saved ${item.plot.title}`} onClick={() => duplicateStoredShow(item)}><Plus size={13}/></button><button aria-label={`Delete saved ${item.plot.title}`} onClick={() => { if (item.plot.id === plot.id) return; if (confirm(`Delete saved show “${item.plot.title}”?`)) { deleteStoredPlot(item.plot.id); setLibraryRevision(value => value + 1); } }} disabled={item.plot.id === plot.id}><Trash2 size={13}/></button></div>)}
-            {backups.length > 0 && <details><summary>Backups for this show ({backups.length})</summary>{backups.map(item => <button className="backup" key={item.savedAt} onClick={() => { if (confirm(`Restore backup from ${new Date(item.savedAt).toLocaleString()}?`)) { resetPlot(normalisePlot(item.plot)); setStartupStep(null); } }}>{new Date(item.savedAt).toLocaleString()}</button>)}</details>}
-          </div>
-          <div className="new-show-panel"><div><strong>Create a new show</strong><span>The current show stays in your device library.</span></div><button className="secondary" onClick={() => { setNewShow({ company: '', name: '' }); setStartupStep('new'); }}><Plus size={16}/> New show</button></div>
           <div className="modal-buttons menu-footer">
             <button className="text-button about-button" onClick={() => setEasterEgg(value => !value)}>About</button>
             {easterEgg && <span className="easter-egg">andy was here &lt;3</span>}

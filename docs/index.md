@@ -4,12 +4,11 @@ title: Mic Plot Studio documentation
 
 # Mic Plot Studio documentation
 
-Mic Plot Studio is a local-first tool for planning microphone assignments by
-character and scene.
+Follow the guide that matches your task:
 
-- [User guide](user-guide.md)
-- [Development and releases](development.md)
-- [Docker and Unraid deployment](deployment.md)
+1. [Create and operate a show](user-guide.md), from setup through PDF export.
+2. [Set up development and publish a release](development.md).
+3. [Deploy or update Docker and Unraid](deployment.md).
 
-Show data remains in the browser unless the user downloads a `.micplot` backup.
-For defects and feature requests, use the repository's GitHub issue tracker.
+Shows remain in browser storage unless you download a `.micplot` backup. Use
+the GitHub issue tracker for defects and feature requests.

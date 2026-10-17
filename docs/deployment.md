@@ -1,40 +1,57 @@
 # Docker and Unraid deployment
 
-## Image tags
+## 1. Choose an image tag
 
-Pushes to `main` publish the Linux AMD64 image to:
+The image is published at:
 
 ```text
 ghcr.io/staljabro/mic-plot-generator
 ```
 
-Published builds receive three useful tags:
+- `latest` follows the newest default-branch build.
+- `v1.0.0` selects this release.
+- `sha-<commit>` selects an immutable build.
 
-- `latest` for the newest build from the default branch
-- `v<version>` from `src/version.js`, such as `v0.2.0`
-- `sha-<commit>` as an immutable build reference
+The image is Linux AMD64 and includes its version in the OCI metadata.
 
-Use `latest` for automatic updates or a version/SHA tag for reproducible
-deployments. The image also records the application version in the
-`org.opencontainers.image.version` OCI label.
+## 2. Prepare registry access
 
-## Docker Compose and Unraid
+1. Continue without credentials if the GHCR package is public.
+2. For a private package, create a GitHub token with `read:packages`.
+3. Configure that credential in Docker or Unraid.
 
-The included `compose.unraid.yaml` publishes container port 80 on host port
-8087. Start or update it with:
+## 3. Deploy with Compose
 
-```bash
-docker compose -f compose.unraid.yaml pull
-docker compose -f compose.unraid.yaml up -d
-```
+1. Review `compose.unraid.yaml`; it maps host port 8087 to container port 80.
+2. Change the host port or image tag if needed.
+3. Pull and start:
 
-Docker's Restart action does not pull a newer image. In Unraid, use Check for
-Updates / Update, configure Compose to pull on startup, or use an automatic
-container-update mechanism.
+   ```bash
+   docker compose -f compose.unraid.yaml pull
+   docker compose -f compose.unraid.yaml up -d
+   ```
 
-If the GitHub Container Registry package is private, configure credentials with
-a GitHub token that has `read:packages`. Public packages require no registry
-credentials.
+4. Open `http://<server-address>:8087` and confirm v1.0.0 in Help.
 
-To pin a release, change the Compose image from `:latest` to a version such as
-`:v0.2.0`.
+## 4. Deploy from the Unraid Docker tab
+
+1. Use `ghcr.io/staljabro/mic-plot-generator:latest` or a pinned tag.
+2. Map a host port to container port 80.
+3. Start the container and open the mapped URL.
+4. Use **Check for Updates / Update** for new images.
+
+## 5. Update a deployment
+
+1. Pull the selected tag.
+2. Recreate the container:
+
+   ```bash
+   docker compose -f compose.unraid.yaml pull
+   docker compose -f compose.unraid.yaml up -d
+   ```
+
+3. Reload the app and confirm the version in Help.
+
+Docker Restart does not pull a newer image. Configure an update mechanism for
+unattended updates. Pin `:v1.0.0` or `:sha-...` instead of `:latest` when the
+deployment must remain reproducible.
