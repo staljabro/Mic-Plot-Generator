@@ -33,6 +33,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Read and validate application version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node --input-type=module -e "import('./src/version.js').then(module => process.stdout.write(module.APP_VERSION))")
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid APP_VERSION: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+            echo "Git tag ${GITHUB_REF_NAME} does not match src/version.js (v${VERSION})" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -51,7 +66,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
+            type=raw,value=v${{ steps.version.outputs.version }},enable=${{ github.event_name != 'pull_request' }}
             type=sha,prefix=sha-
 
       - name: Build and publish image
@@ -62,5 +77,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
