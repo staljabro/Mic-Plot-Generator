@@ -556,6 +556,9 @@ function App() {
     const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
     const scenes = pdfOptions.selectedOnly && selectedSceneIds.length ? plot.scenes.filter(scene => selectedSceneIds.includes(scene.id)) : plot.scenes;
     const doc = new jsPDF({ orientation: pdfOptions.orientation, unit: 'mm', format: pdfOptions.format });
+    const exportHeading = `MIC PLOT - LISTED BY ${pdfOptions.dataLayout === 'cast' ? 'CAST' : 'CHARACTER'} - ${pdfOptions.format.toUpperCase()} EXPORT`;
+    const exportTimestamp = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date());
+    doc.setProperties({ title: `${exportHeading} - ${exportTimestamp}` });
     const stateValues = character => scenes.map(scene => labels[plot.cells[`${character.id}:${scene.id}`] || 'off']);
     let identityHeaders;
     let body;
@@ -630,10 +633,11 @@ function App() {
     const logoAreaTop = logos.length ? Math.min(...logos.map(logo => logo.y)) : 3;
     const imageBottom = logos.length ? Math.max(...logos.map(logo => logo.y + logo.height)) : 16;
     const headerMidpoint = (logoAreaTop + imageBottom) / 2;
-    const headerTitleY = logos.length ? headerMidpoint - 1.25 : 10;
+    const headerTitleY = logos.length ? headerMidpoint - 3.25 : 10;
     const headerDetailY = headerTitleY + 6;
+    const headerTimestampY = headerDetailY + 4;
     const legendLayout = () => {
-      if (!pdfOptions.includeLegend) return { items: [], bottom: headerDetailY };
+      if (!pdfOptions.includeLegend) return { items: [], bottom: headerTimestampY };
       doc.setFontSize(6.5);
       let x = headerTextX; let row = 0;
       const items = plot.states.map(state => {
@@ -647,7 +651,7 @@ function App() {
         return item;
       });
       const lastRow = items.at(-1)?.row || 0;
-      const lastBaseline = Math.max(headerDetailY + 6 + lastRow * 5.5, imageBottom - 1);
+      const lastBaseline = Math.max(headerTimestampY + 6 + lastRow * 5.5, imageBottom - 1);
       items.forEach(item => { item.y = lastBaseline - (lastRow - item.row) * 5.5; });
       return { items, bottom: lastBaseline + 1 };
     };
@@ -656,7 +660,8 @@ function App() {
     const drawPageHeader = (pageNumber, pageCount) => {
       logos.forEach(logo => doc.addImage(logo.image, logo.x, logo.y, logo.width, logo.height));
       doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(23, 63, 52); doc.text(plot.title || 'Mic Plot', headerTextX, headerTitleY);
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text(`${pdfOptions.format.toUpperCase()} ${pdfOptions.dataLayout === 'cast' ? 'CAST ' : ''}MIC PLOT · ${pageNumber} of ${pageCount}`, headerTextX, headerDetailY);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(100, 115, 108); doc.text(exportHeading, headerTextX, headerDetailY);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.text(`${exportTimestamp} - ${pageNumber} of ${pageCount}`, headerTextX, headerTimestampY);
       legend.items.forEach(({ state, shortName, badgeWidth, x, y }) => {
         const [r, g, b] = hexToRgb(state.color);
         doc.setFillColor(r, g, b); doc.setDrawColor(190, 202, 196); doc.roundedRect(x, y - 3.4, badgeWidth, 4.4, .6, .6, 'FD');

@@ -33,7 +33,7 @@ This runs model, persistence, and version tests before a production build.
 The source of truth is:
 
 ```js
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.1';
 ```
 
 1. Change `APP_VERSION` in `src/version.js`.
@@ -51,14 +51,14 @@ version label.
 3. Create a tag exactly matching `v` plus `APP_VERSION`.
 4. Push the tag.
 
-For version 1.0.0:
+For version 1.0.1:
 
 ```bash
 git add src/version.js package.json package-lock.json README.md docs
-git commit -m "Release v1.0.0"
+git commit -m "Release v1.0.1"
 git push origin main
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 The Docker workflow rejects a release tag that differs from `src/version.js`.

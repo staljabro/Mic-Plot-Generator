@@ -1,7 +1,7 @@
 # Mic Plot Generator
 
 Mic Plot Generator is a local-first React app for building character-to-scene
-microphone plots. Version 1.0.0 supports configurable cue states, two editing
+microphone plots. Version 1.0.1 supports configurable cue states, two editing
 modes, reusable groups, cast-based review, multiple locally saved shows,
 recovery snapshots, portable `.micplot` files, CSV output, and full-document
 PDF preview and export.
@@ -57,7 +57,7 @@ browser storage should not be the only copy of an important show.
 3. For Docker or Unraid, follow the [deployment guide](docs/deployment.md).
 
 The release source of truth is [`src/version.js`](src/version.js). For version
-1.0.0, npm metadata, the app display, GitHub Actions, Docker tags, and OCI image
+1.0.1, npm metadata, the app display, GitHub Actions, Docker tags, and OCI image
 labels all use the same value.
 
 ## Run locally
@@ -95,5 +95,5 @@ This runs the automated tests and production build.
    ```
 
 The default image is `ghcr.io/staljabro/mic-plot-generator:latest`. Pin
-`:v1.0.0` or an immutable `:sha-...` tag when reproducibility matters. Docker's
+`:v1.0.1` or an immutable `:sha-...` tag when reproducibility matters. Docker's
 plain Restart action does not pull a newer image.

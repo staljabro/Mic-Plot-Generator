@@ -112,7 +112,8 @@ Cast channels follow performer order in the character list. Additional roles
 leave Channel # blank and show a small grey continuation arrow in Cast member.
 Compact number and scene headings render vertically. Repeated pages retain the
 required identity columns, show header, scene row, logos, coloured legend, and
-page count. Columns and scene-header height adapt to their content.
+page count. Each page identifies the selected layout and paper size, followed
+by the export date and time. Columns and scene-header height adapt to content.
 
 ## 11. Export other formats
 

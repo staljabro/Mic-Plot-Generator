@@ -9,7 +9,7 @@ ghcr.io/staljabro/mic-plot-generator
 ```
 
 - `latest` follows the newest default-branch build.
-- `v1.0.0` selects this release.
+- `v1.0.1` selects this release.
 - `sha-<commit>` selects an immutable build.
 
 The image is Linux AMD64 and includes its version in the OCI metadata.
@@ -31,7 +31,7 @@ The image is Linux AMD64 and includes its version in the OCI metadata.
    docker compose -f compose.unraid.yaml up -d
    ```
 
-4. Open `http://<server-address>:8087` and confirm v1.0.0 in Help.
+4. Open `http://<server-address>:8087` and confirm v1.0.1 in Help.
 
 ## 4. Deploy from the Unraid Docker tab
 
@@ -53,5 +53,5 @@ The image is Linux AMD64 and includes its version in the OCI metadata.
 3. Reload the app and confirm the version in Help.
 
 Docker Restart does not pull a newer image. Configure an update mechanism for
-unattended updates. Pin `:v1.0.0` or `:sha-...` instead of `:latest` when the
+unattended updates. Pin `:v1.0.1` or `:sha-...` instead of `:latest` when the
 deployment must remain reproducible.
